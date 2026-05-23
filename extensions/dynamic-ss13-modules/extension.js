@@ -8,6 +8,7 @@ const vscode = require("vscode");
 const CONFIG_SECTION = "dynamicSs13Modules";
 const OUTPUT_NAME = "Dynamic Modules";
 const DEFAULT_INDEX_PATH = ".dynamic_modules_build/index.json";
+const LIVE_AUTHORING_SESSION = "_live";
 
 function activate(context) {
   const controller = new DynamicModulesController(context);
@@ -29,12 +30,55 @@ class DynamicModulesController {
     this.indexPath = null;
     this.root = null;
     this.commandRunning = false;
+    this.openingIntegratedFile = false;
+    this.authoringManifestCache = new Map();
 
     this.decorationType = vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
       overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.warningForeground"),
       overviewRulerLane: vscode.OverviewRulerLane.Right,
       backgroundColor: new vscode.ThemeColor("editor.findMatchHighlightBackground")
+    });
+    this.overrideStartDecorationType = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      borderColor: new vscode.ThemeColor("editorInfo.foreground"),
+      borderStyle: "solid",
+      borderWidth: "1px 0 0 3px",
+      overviewRulerColor: new vscode.ThemeColor("editorInfo.foreground"),
+      overviewRulerLane: vscode.OverviewRulerLane.Right,
+      before: {
+        color: new vscode.ThemeColor("editorInfo.foreground"),
+        fontWeight: "bold",
+        margin: "0 1em 0 0"
+      }
+    });
+    this.overrideChangedDecorationType = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: new vscode.ThemeColor("editor.wordHighlightBackground"),
+      overviewRulerColor: new vscode.ThemeColor("editorInfo.foreground"),
+      overviewRulerLane: vscode.OverviewRulerLane.Right
+    });
+    this.overrideEndDecorationType = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      borderColor: new vscode.ThemeColor("editorInfo.foreground"),
+      borderStyle: "solid",
+      borderWidth: "0 0 1px 3px",
+      after: {
+        color: new vscode.ThemeColor("editorInfo.foreground"),
+        fontStyle: "italic",
+        margin: "0 0 0 1.5em"
+      }
+    });
+    this.overrideRemovedDecorationType = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
+      overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.deletedForeground"),
+      overviewRulerLane: vscode.OverviewRulerLane.Right,
+      after: {
+        color: new vscode.ThemeColor("editorError.foreground"),
+        fontStyle: "italic",
+        margin: "0 0 0 1.5em"
+      }
     });
 
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 75);
@@ -43,6 +87,10 @@ class DynamicModulesController {
     context.subscriptions.push(
       this.output,
       this.decorationType,
+      this.overrideStartDecorationType,
+      this.overrideChangedDecorationType,
+      this.overrideEndDecorationType,
+      this.overrideRemovedDecorationType,
       this.statusBar,
       vscode.window.registerTreeDataProvider("dynamicSs13Modules.modules", this.modulesProvider),
       vscode.window.registerTreeDataProvider("dynamicSs13Modules.currentFile", this.currentFileProvider),
@@ -54,6 +102,7 @@ class DynamicModulesController {
       vscode.commands.registerCommand("dynamicSs13Modules.openWorkspace", () => this.openGeneratedWorkspace()),
       vscode.commands.registerCommand("dynamicSs13Modules.explainCurrentFile", () => this.explainCurrentFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.previewCurrentFile", () => this.previewCurrentFile()),
+      vscode.commands.registerCommand("dynamicSs13Modules.openIntegratedFinalFile", () => this.openIntegratedFinalFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.convertChangesToModule", () => this.convertChangesToModule()),
       vscode.commands.registerCommand("dynamicSs13Modules.generateAuthoringWorkspace", () => this.generateAuthoringWorkspace()),
       vscode.commands.registerCommand("dynamicSs13Modules.deconvertAuthoringWorkspace", () => this.deconvertAuthoringWorkspace()),
@@ -70,7 +119,10 @@ class DynamicModulesController {
       vscode.commands.registerCommand("dynamicSs13Modules.copyInteractionSummary", (item) => this.copyInteractionSummary(item)),
       vscode.commands.registerCommand("dynamicSs13Modules.openSettings", () => this.openSettings()),
       vscode.commands.registerCommand("dynamicSs13Modules.openPath", (target) => this.openPath(target)),
-      vscode.window.onDidChangeActiveTextEditor(() => this.updateActiveFileState()),
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        this.maybeOpenIntegratedFinalFile(editor);
+        this.updateActiveFileState();
+      }),
       vscode.workspace.onDidChangeTextDocument((event) => {
         const editor = vscode.window.activeTextEditor;
         if (editor && event.document.uri.toString() === editor.document.uri.toString()) {
@@ -91,6 +143,7 @@ class DynamicModulesController {
 
     this.refresh(false);
     this.configureWatchers();
+    this.maybeOpenIntegratedFinalFile(vscode.window.activeTextEditor);
   }
 
   dispose() {
@@ -113,6 +166,7 @@ class DynamicModulesController {
     this.currentFileProvider.refresh();
     this.codeLensProvider.refresh();
     this.updateActiveFileState();
+    this.maybeOpenIntegratedFinalFile(vscode.window.activeTextEditor);
 
     if (showMessage) {
       if (this.index) {
@@ -283,6 +337,11 @@ class DynamicModulesController {
     if (!this.index) {
       return null;
     }
+    const authoringFile = this.authoringFileForDocument(document);
+    if (authoringFile?.target_file) {
+      return authoringFile.target_file;
+    }
+
     const fileComparable = comparablePath(document.uri.fsPath);
     const hostComparable = comparablePath(this.index.host_root || this.root || "");
     if (hostComparable && startsWithPath(fileComparable, hostComparable)) {
@@ -306,6 +365,70 @@ class DynamicModulesController {
     }
 
     return document.uri.fsPath.replace(/\\/g, "/");
+  }
+
+  authoringFileForDocument(document) {
+    if (!document || document.uri.scheme !== "file") {
+      return null;
+    }
+    return this.authoringFileForPath(document.uri.fsPath);
+  }
+
+  authoringFileForPath(filePath) {
+    const authoringRoot = this.authoringRoot();
+    if (!filePath || !authoringRoot) {
+      return null;
+    }
+    const fileComparable = comparablePath(filePath);
+    const rootComparable = comparablePath(authoringRoot);
+    if (!startsWithPath(fileComparable, rootComparable)) {
+      return null;
+    }
+
+    const relative = path.relative(authoringRoot, filePath).replace(/\\/g, "/");
+    const [sessionId, rootName, ...rest] = relative.split("/");
+    if (!sessionId || rootName !== "files" || !rest.length) {
+      return null;
+    }
+    const targetFile = rest.join("/");
+    const sessionRoot = path.join(authoringRoot, sessionId);
+    const manifest = this.readAuthoringManifest(path.join(sessionRoot, "dynamic-authoring.json"));
+    const entry = (manifest?.files || []).find((file) => comparablePath(file.target_file) === comparablePath(targetFile));
+    if (!entry) {
+      return {
+        session_id: sessionId,
+        sessionRoot,
+        target_file: targetFile,
+        editablePath: filePath,
+        baselinePath: path.join(sessionRoot, "baseline", targetFile)
+      };
+    }
+    return {
+      ...entry,
+      session_id: sessionId,
+      sessionRoot,
+      target_file: entry.target_file,
+      editablePath: path.join(sessionRoot, entry.editable_path),
+      baselinePath: path.join(sessionRoot, entry.baseline_path)
+    };
+  }
+
+  readAuthoringManifest(manifestPath) {
+    if (!manifestPath || !fs.existsSync(manifestPath)) {
+      return null;
+    }
+    const cached = this.authoringManifestCache.get(manifestPath);
+    const stat = fs.statSync(manifestPath);
+    if (cached && cached.mtimeMs === stat.mtimeMs) {
+      return cached.manifest;
+    }
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      this.authoringManifestCache.set(manifestPath, { mtimeMs: stat.mtimeMs, manifest });
+      return manifest;
+    } catch {
+      return null;
+    }
   }
 
   interactionsForDocument(document) {
@@ -336,6 +459,185 @@ class DynamicModulesController {
     this.currentFileProvider.refresh();
     this.updateStatusBar();
     this.updateDecorations();
+  }
+
+  async maybeOpenIntegratedFinalFile(editor) {
+    if (!editor || this.openingIntegratedFile || !this.config().get("autoOpenFinalFiles", true)) {
+      return;
+    }
+    if (!this.index || editor.document.uri.scheme !== "file") {
+      return;
+    }
+    if (this.authoringFileForDocument(editor.document)) {
+      return;
+    }
+
+    const key = this.keyForDocument(editor.document);
+    if (!key || !isAuthorablePath(key)) {
+      return;
+    }
+    const interactions = this.interactionsForDocument(editor.document);
+    if (!interactions.some((interaction) => interaction.output_file)) {
+      return;
+    }
+
+    const entry = this.ensureLiveAuthoringFile(key, interactions);
+    if (!entry?.editablePath || comparablePath(entry.editablePath) === comparablePath(editor.document.uri.fsPath)) {
+      return;
+    }
+
+    try {
+      this.openingIntegratedFile = true;
+      await this.ensureLiveAuthoringWorkspaceFolder(entry.sessionRoot);
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(entry.editablePath));
+      await vscode.window.showTextDocument(document, {
+        viewColumn: editor.viewColumn,
+        preview: false,
+        preserveFocus: false
+      });
+    } catch (error) {
+      this.output.appendLine(`Could not open integrated final file for ${key}: ${error.stack || error.message}`);
+    } finally {
+      this.openingIntegratedFile = false;
+    }
+  }
+
+  async openIntegratedFinalFile() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      vscode.window.showInformationMessage("Open a file first.");
+      return;
+    }
+    if (!this.index) {
+      vscode.window.showWarningMessage("No Dynamic Modules index found. Run Dynamic Modules: Prepare.");
+      return;
+    }
+    const key = this.keyForDocument(editor.document);
+    const interactions = this.interactionsForDocument(editor.document);
+    if (!key || !interactions.some((interaction) => interaction.output_file)) {
+      vscode.window.showInformationMessage("No materialized module output is recorded for this file.");
+      return;
+    }
+    const entry = this.ensureLiveAuthoringFile(key, interactions);
+    if (entry?.editablePath) {
+      await this.ensureLiveAuthoringWorkspaceFolder(entry.sessionRoot);
+      await this.openPath(entry.editablePath);
+    }
+  }
+
+  ensureLiveAuthoringFile(targetFile, interactions) {
+    const sourcePath = this.finalSourcePathForAuthoring(targetFile, interactions || []);
+    if (!sourcePath || !fs.existsSync(sourcePath)) {
+      return null;
+    }
+
+    const sessionRoot = path.join(this.authoringRoot(), LIVE_AUTHORING_SESSION);
+    const filesRoot = path.join(sessionRoot, "files");
+    const baselineRoot = path.join(sessionRoot, "baseline");
+    const editablePath = path.join(filesRoot, targetFile);
+    const baselinePath = path.join(baselineRoot, targetFile);
+    const manifestPath = path.join(sessionRoot, "dynamic-authoring.json");
+
+    fs.mkdirSync(path.dirname(editablePath), { recursive: true });
+    fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
+    this.ensureLocalGitExclude(this.authoringRoot());
+
+    const sourceHash = sha256File(sourcePath);
+    const editableExists = fs.existsSync(editablePath);
+    const baselineExists = fs.existsSync(baselinePath);
+    const editableChanged = editableExists && baselineExists && sha256File(editablePath) !== sha256File(baselinePath);
+    const baselineChanged = !baselineExists || sha256File(baselinePath) !== sourceHash;
+
+    if (!editableExists || (!editableChanged && baselineChanged)) {
+      fs.copyFileSync(sourcePath, editablePath);
+    }
+    if (!baselineExists || !editableChanged) {
+      fs.copyFileSync(sourcePath, baselinePath);
+    }
+
+    const manifest = this.readAuthoringManifest(manifestPath) || {
+      version: 1,
+      session_id: LIVE_AUTHORING_SESSION,
+      live: true,
+      host_root: this.localHostRoot(),
+      index_path: this.indexPath,
+      index_generated_at: this.index?.generated_at || null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      files: []
+    };
+    manifest.live = true;
+    manifest.host_root = this.localHostRoot();
+    manifest.index_path = this.indexPath;
+    manifest.index_generated_at = this.index?.generated_at || null;
+    manifest.updated_at = new Date().toISOString();
+
+    const fileEntry = {
+      target_file: targetFile,
+      editable_path: path.relative(sessionRoot, editablePath).replace(/\\/g, "/"),
+      baseline_path: path.relative(sessionRoot, baselinePath).replace(/\\/g, "/"),
+      source_path: sourcePath,
+      kind: authoringKind(targetFile),
+      modules: [...new Set((interactions || []).map((item) => item.module).filter(Boolean))],
+      interactions: (interactions || []).map((item) => ({
+        kind: item.kind,
+        module: item.module,
+        id: item.id,
+        mode: item.mode,
+        anchor_line: item.anchor_line,
+        output_file: item.output_file
+      })),
+      baseline_sha256: sha256File(baselinePath)
+    };
+    const index = manifest.files.findIndex((file) => comparablePath(file.target_file) === comparablePath(targetFile));
+    if (index === -1) {
+      manifest.files.push(fileEntry);
+    } else {
+      manifest.files[index] = { ...manifest.files[index], ...fileEntry };
+    }
+    manifest.files.sort((left, right) => left.target_file.localeCompare(right.target_file));
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    this.authoringManifestCache.delete(manifestPath);
+
+    const workspacePath = path.join(sessionRoot, "dynamic-authoring.code-workspace");
+    if (!fs.existsSync(workspacePath)) {
+      fs.writeFileSync(workspacePath, `${JSON.stringify({
+        folders: [
+          { name: "host", path: this.localHostRoot() },
+          { name: "dynamic-final", path: filesRoot }
+        ],
+        settings: {
+          "dynamicSs13Modules.authoringSessionManifest": manifestPath
+        }
+      }, null, 2)}\n`, "utf8");
+    }
+
+    return {
+      ...fileEntry,
+      sessionRoot,
+      editablePath,
+      baselinePath,
+      manifestPath
+    };
+  }
+
+  async ensureLiveAuthoringWorkspaceFolder(sessionRoot) {
+    if (!this.config().get("addLiveFinalFolderToWorkspace", true) || !sessionRoot) {
+      return;
+    }
+    const liveFilesRoot = path.join(sessionRoot, "files");
+    if (!fs.existsSync(liveFilesRoot)) {
+      return;
+    }
+    const folders = vscode.workspace.workspaceFolders || [];
+    const alreadyOpen = folders.some((folder) => comparablePath(folder.uri.fsPath) === comparablePath(liveFilesRoot));
+    if (alreadyOpen) {
+      return;
+    }
+    vscode.workspace.updateWorkspaceFolders(folders.length, 0, {
+      uri: vscode.Uri.file(liveFilesRoot),
+      name: "dynamic-final"
+    });
   }
 
   updateStatusBar() {
@@ -369,6 +671,10 @@ class DynamicModulesController {
     }
     if (!this.config().get("showDecorations", true)) {
       editor.setDecorations(this.decorationType, []);
+      editor.setDecorations(this.overrideStartDecorationType, []);
+      editor.setDecorations(this.overrideChangedDecorationType, []);
+      editor.setDecorations(this.overrideEndDecorationType, []);
+      editor.setDecorations(this.overrideRemovedDecorationType, []);
       return;
     }
 
@@ -396,6 +702,123 @@ class DynamicModulesController {
       });
     }
     editor.setDecorations(this.decorationType, decorations);
+    this.updateOverrideBlockDecorations(editor, interactions);
+  }
+
+  updateOverrideBlockDecorations(editor, interactions) {
+    if (!this.config().get("showInlineOverrideBlocks", true)) {
+      editor.setDecorations(this.overrideStartDecorationType, []);
+      editor.setDecorations(this.overrideChangedDecorationType, []);
+      editor.setDecorations(this.overrideEndDecorationType, []);
+      editor.setDecorations(this.overrideRemovedDecorationType, []);
+      return;
+    }
+    const targetFile = this.keyForDocument(editor.document);
+    if (!targetFile || !interactions.length) {
+      editor.setDecorations(this.overrideStartDecorationType, []);
+      editor.setDecorations(this.overrideChangedDecorationType, []);
+      editor.setDecorations(this.overrideEndDecorationType, []);
+      editor.setDecorations(this.overrideRemovedDecorationType, []);
+      return;
+    }
+
+    const basePath = this.resolveIndexPath(targetFile);
+    if (!basePath || !fs.existsSync(basePath)) {
+      editor.setDecorations(this.overrideStartDecorationType, []);
+      editor.setDecorations(this.overrideChangedDecorationType, []);
+      editor.setDecorations(this.overrideEndDecorationType, []);
+      editor.setDecorations(this.overrideRemovedDecorationType, []);
+      return;
+    }
+    let baseText;
+    try {
+      baseText = fs.readFileSync(basePath, "utf8");
+    } catch {
+      editor.setDecorations(this.overrideStartDecorationType, []);
+      editor.setDecorations(this.overrideChangedDecorationType, []);
+      editor.setDecorations(this.overrideEndDecorationType, []);
+      editor.setDecorations(this.overrideRemovedDecorationType, []);
+      return;
+    }
+
+    const finalText = editor.document.getText();
+    const hunks = diffLineHunks(baseText, finalText);
+    if (!hunks.length) {
+      editor.setDecorations(this.overrideStartDecorationType, []);
+      editor.setDecorations(this.overrideChangedDecorationType, []);
+      editor.setDecorations(this.overrideEndDecorationType, []);
+      editor.setDecorations(this.overrideRemovedDecorationType, []);
+      return;
+    }
+
+    const startDecorations = [];
+    const changedDecorations = [];
+    const endDecorations = [];
+    const removedDecorations = [];
+    for (const hunk of hunks) {
+      const modules = modulesForHunk(hunk, interactions);
+      const moduleLabel = modules.length ? modules.join(", ") : "unknown module";
+      const startLine = clampLine(editor.document, hunk.newStart);
+      const endLine = clampLine(editor.document, Math.max(hunk.newStart, hunk.newEnd - 1));
+      const hover = new vscode.MarkdownString(undefined, true);
+      hover.supportHtml = false;
+      hover.appendMarkdown(`**MODULAR OVERRIDE FROM: ${escapeMarkdown(moduleLabel)}**\n\n`);
+      hover.appendMarkdown(`${escapeMarkdown(targetFile)}\n\n`);
+      if (hunk.removed.length) {
+        hover.appendMarkdown("_Removed base lines:_\n\n");
+        hover.appendCodeblock(hunk.removed.join("\n"), languageForPath(targetFile));
+      }
+
+      startDecorations.push({
+        range: new vscode.Range(startLine, 0, startLine, 0),
+        hoverMessage: hover,
+        renderOptions: {
+          before: {
+            contentText: `MODULAR OVERRIDE FROM: ${moduleLabel}  `
+          }
+        }
+      });
+
+      for (let line = hunk.newStart; line < Math.max(hunk.newEnd, hunk.newStart + 1); line += 1) {
+        const changedLine = clampLine(editor.document, line);
+        changedDecorations.push({
+          range: editor.document.lineAt(changedLine).range,
+          hoverMessage: hover
+        });
+      }
+
+      if (hunk.removed.length) {
+        const removedText = hunk.removed
+          .slice(0, 3)
+          .map((line) => line.trimEnd())
+          .join("  |  ");
+        const suffix = hunk.removed.length > 3 ? `  |  ... ${hunk.removed.length - 3} more removed line(s)` : "";
+        removedDecorations.push({
+          range: editor.document.lineAt(startLine).range,
+          hoverMessage: hover,
+          renderOptions: {
+            after: {
+              contentText: `  REMOVED: ${removedText}${suffix}`
+            }
+          }
+        });
+      }
+
+      endDecorations.push({
+        range: editor.document.lineAt(endLine).range,
+        hoverMessage: hover,
+        renderOptions: {
+          after: {
+            contentText: `  END MODULAR OVERRIDE: ${moduleLabel}`
+          }
+        }
+      });
+    }
+
+    editor.setDecorations(this.overrideStartDecorationType, startDecorations);
+    editor.setDecorations(this.overrideChangedDecorationType, changedDecorations);
+    editor.setDecorations(this.overrideEndDecorationType, endDecorations);
+    editor.setDecorations(this.overrideRemovedDecorationType, removedDecorations);
   }
 
   shortInteractionLabel(interaction) {
@@ -2397,6 +2820,146 @@ function readFileSnippet(filePath, anchorLine, contextLines) {
   } catch {
     return null;
   }
+}
+
+function diffLineHunks(oldText, newText) {
+  const oldLines = oldText.split(/\r?\n/);
+  const newLines = newText.split(/\r?\n/);
+  if (oldLines.length && oldLines[oldLines.length - 1] === "") {
+    oldLines.pop();
+  }
+  if (newLines.length && newLines[newLines.length - 1] === "") {
+    newLines.pop();
+  }
+
+  let prefix = 0;
+  while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) {
+    prefix += 1;
+  }
+
+  let oldSuffix = oldLines.length;
+  let newSuffix = newLines.length;
+  while (oldSuffix > prefix && newSuffix > prefix && oldLines[oldSuffix - 1] === newLines[newSuffix - 1]) {
+    oldSuffix -= 1;
+    newSuffix -= 1;
+  }
+
+  if (prefix === oldLines.length && prefix === newLines.length) {
+    return [];
+  }
+
+  const oldMiddle = oldLines.slice(prefix, oldSuffix);
+  const newMiddle = newLines.slice(prefix, newSuffix);
+  if (!oldMiddle.length || !newMiddle.length || oldMiddle.length * newMiddle.length > 200000) {
+    return [{
+      oldStart: prefix,
+      oldEnd: oldSuffix,
+      newStart: prefix,
+      newEnd: newSuffix,
+      removed: oldMiddle,
+      added: newMiddle
+    }];
+  }
+
+  return lcsDiffHunks(oldMiddle, newMiddle, prefix);
+}
+
+function lcsDiffHunks(oldLines, newLines, offset) {
+  const width = newLines.length + 1;
+  const table = new Array((oldLines.length + 1) * width).fill(0);
+  const at = (oldIndex, newIndex) => oldIndex * width + newIndex;
+  for (let oldIndex = oldLines.length - 1; oldIndex >= 0; oldIndex -= 1) {
+    for (let newIndex = newLines.length - 1; newIndex >= 0; newIndex -= 1) {
+      table[at(oldIndex, newIndex)] = oldLines[oldIndex] === newLines[newIndex]
+        ? table[at(oldIndex + 1, newIndex + 1)] + 1
+        : Math.max(table[at(oldIndex + 1, newIndex)], table[at(oldIndex, newIndex + 1)]);
+    }
+  }
+
+  const hunks = [];
+  let oldIndex = 0;
+  let newIndex = 0;
+  let pending = null;
+  const ensurePending = () => {
+    pending ??= {
+      oldStart: oldIndex + offset,
+      oldEnd: oldIndex + offset,
+      newStart: newIndex + offset,
+      newEnd: newIndex + offset,
+      removed: [],
+      added: []
+    };
+    return pending;
+  };
+  const flush = () => {
+    if (pending) {
+      hunks.push(pending);
+      pending = null;
+    }
+  };
+
+  while (oldIndex < oldLines.length || newIndex < newLines.length) {
+    if (oldIndex < oldLines.length && newIndex < newLines.length && oldLines[oldIndex] === newLines[newIndex]) {
+      flush();
+      oldIndex += 1;
+      newIndex += 1;
+      continue;
+    }
+    if (newIndex < newLines.length && (oldIndex >= oldLines.length || table[at(oldIndex, newIndex + 1)] >= table[at(oldIndex + 1, newIndex)])) {
+      const hunk = ensurePending();
+      hunk.added.push(newLines[newIndex]);
+      newIndex += 1;
+      hunk.newEnd = newIndex + offset;
+      continue;
+    }
+    if (oldIndex < oldLines.length) {
+      const hunk = ensurePending();
+      hunk.removed.push(oldLines[oldIndex]);
+      oldIndex += 1;
+      hunk.oldEnd = oldIndex + offset;
+    }
+  }
+  flush();
+  return hunks;
+}
+
+function modulesForHunk(hunk, interactions) {
+  const oldStartLine = hunk.oldStart + 1;
+  const oldEndLine = Math.max(oldStartLine, hunk.oldEnd);
+  const matching = interactions
+    .filter((interaction) => {
+      const anchor = Number(interaction.anchor_line);
+      return Number.isInteger(anchor) && anchor >= oldStartLine - 3 && anchor <= oldEndLine + 3;
+    })
+    .map((interaction) => interaction.module)
+    .filter(Boolean);
+  const modules = matching.length
+    ? matching
+    : interactions.map((interaction) => interaction.module).filter(Boolean);
+  return [...new Set(modules)].sort();
+}
+
+function clampLine(document, line) {
+  return Math.max(0, Math.min(document.lineCount - 1, line));
+}
+
+function languageForPath(filePath) {
+  if (filePath.endsWith(".dm")) {
+    return "dm";
+  }
+  if (/\.(tsx|ts|jsx|js)$/i.test(filePath)) {
+    return "typescript";
+  }
+  if (/\.(scss|css)$/i.test(filePath)) {
+    return "css";
+  }
+  if (/\.json$/i.test(filePath)) {
+    return "json";
+  }
+  if (/\.toml$/i.test(filePath)) {
+    return "toml";
+  }
+  return "";
 }
 
 function isLikelyAbsolute(value) {

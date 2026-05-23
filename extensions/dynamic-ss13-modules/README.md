@@ -14,6 +14,10 @@ VS Code.
   - a current-file interaction tree
 - status bar interaction count for the active editor
 - inline line decorations for structured patches and local module source patches
+- automatic live final files for materialized module edits, so normal editing
+  and VS Code search operate on the post-module file contents
+- blue inline override boundaries, changed-line highlighting, and removed-line
+  callouts for files touched by modules
 - hover snippets for hook source files and materialized patch output
 - commands to run `prepare`, open generated files, and generate/open the
   multi-root module workspace
@@ -55,6 +59,30 @@ after changing module manifests, local module patch manifests, or framework
 configuration.
 
 ## Authoring Workspace
+
+By default, opening a host file that has materialized Dynamic Modules output
+opens a live final authoring copy under:
+
+```text
+.dynamic_modules_authoring/_live/files/
+```
+
+That folder is added to the workspace as `dynamic-final`, which means VS Code
+search, navigation, and normal editor operations see real files containing the
+post-module content. The original host checkout files are left untouched.
+
+The editor overlays mark changed regions with:
+
+- `MODULAR OVERRIDE FROM: <module>` at the start of a changed block
+- highlighted final lines inside the block
+- red removed-line callouts when the base file had lines removed
+- `END MODULAR OVERRIDE: <module>` at the end of the block
+
+Edit the `dynamic-final` files normally, then run
+`Dynamic Modules: Deconvert Authoring Workspace` to convert those edits back
+into a module. Disable this automatic behavior with
+`dynamicSs13Modules.autoOpenFinalFiles` if you want to inspect untouched host
+files directly.
 
 Run `Dynamic Modules: Generate Authoring Workspace` from a prepared host repo.
 The command runs prepare, lets you choose final files from the generated index,

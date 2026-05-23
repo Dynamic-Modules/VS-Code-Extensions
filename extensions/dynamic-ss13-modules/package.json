@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -35,6 +35,7 @@
     "onCommand:dynamicSs13Modules.openWorkspace",
     "onCommand:dynamicSs13Modules.explainCurrentFile",
     "onCommand:dynamicSs13Modules.previewCurrentFile",
+    "onCommand:dynamicSs13Modules.openIntegratedFinalFile",
     "onCommand:dynamicSs13Modules.convertChangesToModule",
     "onCommand:dynamicSs13Modules.generateAuthoringWorkspace",
     "onCommand:dynamicSs13Modules.deconvertAuthoringWorkspace",
@@ -83,6 +84,11 @@
         "command": "dynamicSs13Modules.previewCurrentFile",
         "title": "Dynamic Modules: Open Materialized File",
         "icon": "$(open-preview)"
+      },
+      {
+        "command": "dynamicSs13Modules.openIntegratedFinalFile",
+        "title": "Dynamic Modules: Open Integrated Final File",
+        "icon": "$(go-to-file)"
       },
       {
         "command": "dynamicSs13Modules.convertChangesToModule",
@@ -196,6 +202,11 @@
           "command": "dynamicSs13Modules.explainCurrentFile",
           "when": "view == dynamicSs13Modules.currentFile",
           "group": "navigation@2"
+        },
+        {
+          "command": "dynamicSs13Modules.openIntegratedFinalFile",
+          "when": "view == dynamicSs13Modules.currentFile",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -274,6 +285,21 @@
           "type": "boolean",
           "default": true,
           "description": "Show editor decorations for Dynamic Modules interactions in the active file."
+        },
+        "dynamicSs13Modules.showInlineOverrideBlocks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show blue module override boundaries, changed-line highlighting, and removed-line callouts in editors."
+        },
+        "dynamicSs13Modules.autoOpenFinalFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open disk-backed final authoring files when a host file has materialized Dynamic Modules output."
+        },
+        "dynamicSs13Modules.addLiveFinalFolderToWorkspace": {
+          "type": "boolean",
+          "default": true,
+          "description": "Add the live final authoring folder to the current workspace so VS Code search and navigation can see materialized module edits."
         },
         "dynamicSs13Modules.showStatusBar": {
           "type": "boolean",

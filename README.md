@@ -17,10 +17,12 @@ without forcing every package into one VS Code manifest.
 Open `VS-Code-Extensions.code-workspace`, select the `Dynamic SS13 Modules:
 Launch Extension` debug configuration, and press F5.
 
-The extension itself is intentionally a thin UI over the generated
-`.dynamic_modules_build/index.json` file. If the editor needs more structured
-data, add it to the framework's generated index instead of duplicating resolver
-or patch logic in JavaScript.
+The extension is intentionally a thin UI over the generated
+`.dynamic_modules_build/index.json` file. For editor integration it also owns a
+local, disposable authoring surface under `.dynamic_modules_authoring/`, where
+it can materialize final files for normal VS Code search/edit/deconvert flows.
+If the editor needs more structured module data, add it to the framework's
+generated index instead of duplicating resolver or patch logic in JavaScript.
 
 Run the lightweight validation checks from this repository root:
 
