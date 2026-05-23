@@ -77,12 +77,15 @@ class DynamicModulesController {
       }
     });
     this.overrideRemovedDecorationType = vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
       overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.deletedForeground"),
       overviewRulerLane: vscode.OverviewRulerLane.Right,
-      borderColor: new vscode.ThemeColor("editorError.foreground"),
-      borderStyle: "solid",
-      borderWidth: "0 0 0 3px"
+      before: {
+        color: new vscode.ThemeColor("editorError.foreground"),
+        backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
+        fontStyle: "italic",
+        margin: "0",
+        textDecoration: "line-through; display: block; white-space: pre; width: 100vw; box-sizing: border-box;"
+      }
     });
 
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 75);
@@ -1290,8 +1293,14 @@ class DynamicModulesController {
     for (const block of blocks) {
       if (block.hunk.removed.length) {
         removedDecorations.push({
-          range: editor.document.lineAt(block.startLine).range,
-          hoverMessage: block.hover
+          range: new vscode.Range(block.startLine, 0, block.startLine, 0),
+          hoverMessage: block.hover,
+          renderOptions: {
+            before: {
+              contentText: removedVirtualText(block.hunk.removed),
+              height: `${Math.max(1, block.hunk.removed.length) * 1.35}em`
+            }
+          }
         });
       }
 
@@ -3376,16 +3385,7 @@ class InteractionCodeLensProvider {
         command: "dynamicSs13Modules.focusModuleInteraction",
         arguments: [target]
       }));
-      block.hunk.removed.forEach((line, index) => {
-        const lensLine = clampLine(document, block.startLine + index + 1);
-        lenses.push(new vscode.CodeLens(new vscode.Range(lensLine, 0, lensLine, 0), {
-          title: `$(diff-removed) ${codeLensLinePreview(line)}`,
-          command: "dynamicSs13Modules.focusModuleInteraction",
-          arguments: [target]
-        }));
-      });
-      const endLensLine = clampLine(document, block.afterLine + block.hunk.removed.length);
-      lenses.push(new vscode.CodeLens(new vscode.Range(endLensLine, 0, endLensLine, 0), {
+      lenses.push(new vscode.CodeLens(new vscode.Range(block.afterLine, 0, block.afterLine, 0), {
         title: `$(debug-stop) END MODULAR OVERRIDE: ${block.moduleLabel}`,
         command: "dynamicSs13Modules.focusModuleInteraction",
         arguments: [target]
@@ -3869,9 +3869,8 @@ function languageForPath(filePath) {
   return "";
 }
 
-function codeLensLinePreview(line) {
-  const normalized = String(line).trim() || "(blank line)";
-  return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized;
+function removedVirtualText(lines) {
+  return lines.map((line) => String(line)).join("\n");
 }
 
 function isLikelyAbsolute(value) {
