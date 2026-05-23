@@ -2711,7 +2711,7 @@ function renderNewModuleManifest(plan) {
     "",
     "[compat]",
     'target = "tgstation"',
-    'minimum_dynamic_modules = "0.2.0"',
+    'minimum_dynamic_modules = "1.0.0"',
     ""
   ];
   if (plan.requires.size) {
@@ -2824,7 +2824,7 @@ function renderAuthoringModuleManifest(target) {
     "",
     "[compat]",
     'target = "tgstation"',
-    'minimum_dynamic_modules = "0.2.0"',
+    'minimum_dynamic_modules = "1.0.0"',
     "",
     "[build]",
     "dm_files = []",

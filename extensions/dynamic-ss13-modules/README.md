@@ -82,3 +82,12 @@ edited files to the session baseline and writes a new module:
 This flow is meant for maintainer/developer convenience. Run
 `Dynamic Modules: Prepare` afterward to regenerate the final stack and inspect
 the output before committing module changes.
+
+## Local Validation
+
+From the repository root:
+
+```bash
+node --check extensions/dynamic-ss13-modules/extension.js
+python3 -m json.tool extensions/dynamic-ss13-modules/package.json
+```

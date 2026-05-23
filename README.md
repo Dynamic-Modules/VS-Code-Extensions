@@ -21,3 +21,10 @@ The extension itself is intentionally a thin UI over the generated
 `.dynamic_modules_build/index.json` file. If the editor needs more structured
 data, add it to the framework's generated index instead of duplicating resolver
 or patch logic in JavaScript.
+
+Run the lightweight validation checks from this repository root:
+
+```bash
+node --check extensions/dynamic-ss13-modules/extension.js
+python3 -m json.tool extensions/dynamic-ss13-modules/package.json
+```
