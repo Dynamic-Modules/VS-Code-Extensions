@@ -52,10 +52,14 @@ class DynamicModulesController {
       vscode.commands.registerCommand("dynamicSs13Modules.openWorkspace", () => this.openGeneratedWorkspace()),
       vscode.commands.registerCommand("dynamicSs13Modules.explainCurrentFile", () => this.explainCurrentFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.previewCurrentFile", () => this.previewCurrentFile()),
+      vscode.commands.registerCommand("dynamicSs13Modules.convertChangesToModule", () => this.convertChangesToModule()),
       vscode.commands.registerCommand("dynamicSs13Modules.openIndex", () => this.openIndex()),
       vscode.commands.registerCommand("dynamicSs13Modules.openGeneratedInclude", () => this.openGeneratedFile("include_file")),
       vscode.commands.registerCommand("dynamicSs13Modules.openGeneratedTests", () => this.openGeneratedFile("tests_file")),
       vscode.commands.registerCommand("dynamicSs13Modules.openGeneratedConfig", () => this.openGeneratedFile("config_file")),
+      vscode.commands.registerCommand("dynamicSs13Modules.openGeneratedTguiCli", () => this.openGeneratedFile("tgui_cli_file")),
+      vscode.commands.registerCommand("dynamicSs13Modules.openDynamicDmIndex", () => this.openGeneratedFile("dynamic_dm_index_file")),
+      vscode.commands.registerCommand("dynamicSs13Modules.openDynamicAssetsIndex", () => this.openGeneratedFile("dynamic_assets_index_file")),
       vscode.commands.registerCommand("dynamicSs13Modules.openModuleManifest", (item) => this.openModuleManifest(item)),
       vscode.commands.registerCommand("dynamicSs13Modules.addModuleRootToWorkspace", (item) => this.addModuleRootToWorkspace(item)),
       vscode.commands.registerCommand("dynamicSs13Modules.copyInteractionSummary", (item) => this.copyInteractionSummary(item)),
@@ -532,6 +536,520 @@ class DynamicModulesController {
     }
   }
 
+  async convertChangesToModule() {
+    if (!this.root) {
+      vscode.window.showWarningMessage("No Dynamic Modules workspace folder is open.");
+      return;
+    }
+    if (!fs.existsSync(path.join(this.root, ".git"))) {
+      vscode.window.showWarningMessage("Convert Changes to Module needs a Git checkout.");
+      return;
+    }
+
+    const base = await this.pickConversionBaseRef();
+    if (!base) {
+      return;
+    }
+
+    const changes = this.collectGitChanges(base);
+    if (!changes.length) {
+      vscode.window.showInformationMessage(`No convertible branch or working-tree changes found against ${base}.`);
+      return;
+    }
+
+    const selectedPicks = await vscode.window.showQuickPick(changes.map((change) => ({
+      label: `${change.status} ${change.file}`,
+      description: conversionKindLabel(change.file),
+      detail: change.oldFile && change.oldFile !== change.file ? `Renamed from ${change.oldFile}` : undefined,
+      picked: true,
+      change
+    })), {
+      canPickMany: true,
+      placeHolder: "Choose files to convert into a Dynamic Module"
+    });
+    if (!selectedPicks?.length) {
+      return;
+    }
+    const selectedChanges = selectedPicks.map((pick) => pick.change);
+
+    const target = await this.pickConversionTarget();
+    if (!target) {
+      return;
+    }
+
+    const plan = this.buildConversionPlan(base, target, selectedChanges);
+    if (!planHasConvertibleOutput(plan)) {
+      vscode.window.showWarningMessage("No safe module output could be generated. See the Dynamic Modules output channel.");
+      this.showConversionReport(plan);
+      return;
+    }
+
+    const confirm = await vscode.window.showWarningMessage(
+      `Convert ${selectedChanges.length} changed file${selectedChanges.length === 1 ? "" : "s"} into ${target.moduleId}?`,
+      { modal: true },
+      "Convert"
+    );
+    if (confirm !== "Convert") {
+      return;
+    }
+
+    try {
+      this.writeConversionPlan(plan);
+    } catch (error) {
+      this.showConversionReport(plan);
+      this.output.appendLine("");
+      this.output.appendLine(`Conversion failed: ${error.stack || error.message}`);
+      this.output.show(true);
+      vscode.window.showErrorMessage("Dynamic Modules conversion failed. See the Dynamic Modules output channel.");
+      return;
+    }
+    this.showConversionReport(plan);
+    this.modulesProvider.refresh();
+
+    const actions = ["Run Prepare", "Open Manifest", "Show Report"];
+    const action = await vscode.window.showInformationMessage(
+      `Dynamic Modules: converted changes into ${target.moduleId}.`,
+      ...actions
+    );
+    if (action === "Run Prepare") {
+      await this.prepare();
+    } else if (action === "Open Manifest") {
+      await this.openPath(plan.manifestPath);
+    } else if (action === "Show Report") {
+      this.output.show(true);
+    }
+  }
+
+  async pickConversionBaseRef() {
+    const configured = this.config().get("defaultConvertBase", "").trim();
+    const candidates = [];
+    if (configured) {
+      candidates.push(configured);
+    }
+    candidates.push(...this.defaultBaseCandidates());
+    const uniqueCandidates = [...new Set(candidates)].filter((candidate) => this.gitRefExists(candidate));
+    const items = uniqueCandidates.map((candidate, index) => ({
+      label: candidate,
+      description: index === 0 ? "default" : "",
+      ref: candidate
+    }));
+    items.push({ label: "Custom ref...", description: "Enter a branch, tag, or commit", ref: null });
+    const pick = await vscode.window.showQuickPick(items, {
+      placeHolder: "Choose the base ref for branch changes"
+    });
+    if (!pick) {
+      return null;
+    }
+    if (pick.ref) {
+      return pick.ref;
+    }
+    const custom = await vscode.window.showInputBox({
+      prompt: "Base ref to diff against",
+      placeHolder: "origin/main"
+    });
+    return custom?.trim() || null;
+  }
+
+  defaultBaseCandidates() {
+    const candidates = [];
+    try {
+      const originHead = this.git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]).trim();
+      if (originHead) {
+        candidates.push(originHead.replace(/^origin\//, "origin/"));
+      }
+    } catch {
+      // Fall through to common branch names.
+    }
+    candidates.push("origin/main", "main", "origin/master", "master", "HEAD");
+    return candidates;
+  }
+
+  gitRefExists(ref) {
+    try {
+      this.git(["rev-parse", "--verify", `${ref}^{commit}`]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  collectGitChanges(base) {
+    const byFile = new Map();
+    const diffOutput = this.git(["diff", "--name-status", "-M", base, "--", "."]);
+    for (const line of diffOutput.split(/\r?\n/).filter(Boolean)) {
+      const parts = line.split("\t");
+      const status = parts[0] || "M";
+      if (status.startsWith("R") && parts.length >= 3) {
+        byFile.set(parts[2], { status: "M", oldFile: parts[1], file: parts[2] });
+      } else if (parts.length >= 2) {
+        byFile.set(parts[1], { status: status[0], file: parts[1] });
+      }
+    }
+
+    const untracked = this.git(["ls-files", "--others", "--exclude-standard", "--", "."]);
+    for (const file of untracked.split(/\r?\n/).filter(Boolean)) {
+      if (!byFile.has(file)) {
+        byFile.set(file, { status: "A", file });
+      }
+    }
+
+    return [...byFile.values()]
+      .filter((change) => shouldOfferConversion(change.file))
+      .sort((left, right) => left.file.localeCompare(right.file));
+  }
+
+  async pickConversionTarget() {
+    const targetKind = await vscode.window.showQuickPick([
+      { label: "Create new module", description: "Write a new module under dynamic_modules/local", value: "new" },
+      { label: "Add to existing module", description: "Write generated files into a resolved module root", value: "existing" }
+    ], { placeHolder: "Where should the converted changes go?" });
+    if (!targetKind) {
+      return null;
+    }
+
+    if (targetKind.value === "existing") {
+      const modules = this.index?.modules || {};
+      const moduleIds = Object.keys(modules).sort();
+      if (!moduleIds.length) {
+        vscode.window.showWarningMessage("No modules are available in the generated index. Run Prepare first or create a new module.");
+        return null;
+      }
+      const pick = await vscode.window.showQuickPick(moduleIds.map((moduleId) => ({
+        label: moduleId,
+        description: modules[moduleId].name || "",
+        detail: modules[moduleId].root || "",
+        moduleId
+      })), { placeHolder: "Choose the module to receive converted changes" });
+      if (!pick) {
+        return null;
+      }
+      const moduleData = modules[pick.moduleId];
+      const moduleRoot = this.resolveIndexPath(moduleData.root);
+      const manifestPath = this.resolveIndexPath(moduleData.manifest);
+      return {
+        kind: "existing",
+        moduleId: pick.moduleId,
+        moduleName: moduleData.name || pick.moduleId,
+        moduleRoot,
+        manifestPath
+      };
+    }
+
+    const moduleId = await vscode.window.showInputBox({
+      prompt: "New module id",
+      placeHolder: "example-feature",
+      validateInput: (value) => /^[a-z0-9][a-z0-9_-]*$/.test(value)
+        ? undefined
+        : "Use lowercase letters, numbers, hyphens, or underscores."
+    });
+    if (!moduleId) {
+      return null;
+    }
+    const moduleName = await vscode.window.showInputBox({
+      prompt: "New module display name",
+      value: titleCaseModuleId(moduleId)
+    });
+    if (!moduleName) {
+      return null;
+    }
+    const defaultRoot = this.config().get("defaultLocalModuleRoot", "dynamic_modules/local") || "dynamic_modules/local";
+    const moduleRootInput = await vscode.window.showInputBox({
+      prompt: "New module folder, relative to the host repo unless absolute",
+      value: posixJoin(defaultRoot, moduleId)
+    });
+    if (!moduleRootInput) {
+      return null;
+    }
+    const moduleRoot = this.resolvePath(moduleRootInput, this.root);
+    return {
+      kind: "new",
+      moduleId,
+      moduleName,
+      moduleRoot,
+      manifestPath: path.join(moduleRoot, `${moduleId}.module.toml`)
+    };
+  }
+
+  buildConversionPlan(base, target, changes) {
+    const plan = {
+      base,
+      target,
+      moduleId: target.moduleId,
+      moduleRoot: target.moduleRoot,
+      manifestPath: target.manifestPath,
+      writes: [],
+      copies: [],
+      commands: [],
+      patches: [],
+      build: {
+        dm_files: new Set(),
+        test_files: new Set(),
+        assets: new Set(),
+        tgui: new Set()
+      },
+      requires: new Set(),
+      unsupported: [],
+      notes: [],
+      manifestText: null
+    };
+
+    for (const change of changes) {
+      this.addChangeToConversionPlan(plan, change);
+    }
+
+    if ([...plan.build.assets].length) {
+      plan.requires.add("dynamic-assets");
+    }
+
+    plan.manifestText = target.kind === "new"
+      ? renderNewModuleManifest(plan)
+      : updateExistingManifest(target.manifestPath, plan);
+    return plan;
+  }
+
+  addChangeToConversionPlan(plan, change) {
+    const sourcePath = path.join(this.root, change.file);
+    if (change.status === "D") {
+      plan.unsupported.push(`${change.file}: deletions are not safely representable by the current patch engine.`);
+      return;
+    }
+
+    if (change.status === "A") {
+      if (isTguiSourcePath(change.file)) {
+        plan.unsupported.push(`${change.file}: new TGUI files need a hand-authored Dynamic TGUI manifest or support-file wiring.`);
+        return;
+      }
+      this.addAddedFileToPlan(plan, change, sourcePath);
+      return;
+    }
+
+    if (isTguiSourcePath(change.file)) {
+      this.addTguiSmartConversionToPlan(plan, change, sourcePath);
+      return;
+    }
+
+    if (isBinaryLikePath(change.file)) {
+      this.addAssetCopyToPlan(plan, change, sourcePath);
+      plan.notes.push(`${change.file}: copied as a Dynamic Assets contribution; core asset replacement is metadata-only for now.`);
+      return;
+    }
+
+    const patchResults = this.convertDiffToPatches(plan, change);
+    if (!patchResults.length) {
+      plan.unsupported.push(`${change.file}: no safe additive or single-line replacement patches were detected.`);
+    }
+  }
+
+  addAddedFileToPlan(plan, change, sourcePath) {
+    if (!fs.existsSync(sourcePath)) {
+      plan.unsupported.push(`${change.file}: added file is missing from the working tree.`);
+      return;
+    }
+    if (isDmPath(change.file)) {
+      const targetRoot = isTestDmPath(change.file) ? "tests/host" : "code/host";
+      const relative = uniqueModulePath(plan.moduleRoot, posixJoin(targetRoot, change.file));
+      plan.copies.push({ from: sourcePath, to: path.join(plan.moduleRoot, relative) });
+      if (isTestDmPath(change.file)) {
+        plan.build.test_files.add("tests/**/*.dm");
+      } else {
+        plan.build.dm_files.add("code/**/*.dm");
+      }
+      plan.notes.push(`${change.file}: copied as module DM source.`);
+      return;
+    }
+    this.addAssetCopyToPlan(plan, change, sourcePath);
+  }
+
+  addAssetCopyToPlan(plan, change, sourcePath) {
+    if (!fs.existsSync(sourcePath)) {
+      plan.unsupported.push(`${change.file}: current asset file is missing.`);
+      return;
+    }
+    const relative = uniqueModulePath(plan.moduleRoot, posixJoin("assets/host", change.file));
+    plan.copies.push({ from: sourcePath, to: path.join(plan.moduleRoot, relative) });
+    plan.build.assets.add("assets/**/*");
+  }
+
+  addTguiSmartConversionToPlan(plan, change, sourcePath) {
+    if (!fs.existsSync(sourcePath)) {
+      plan.unsupported.push(`${change.file}: current TGUI file is missing.`);
+      return;
+    }
+    const dynamicTguiCli = this.dynamicTguiCliPath();
+    if (!dynamicTguiCli || !fs.existsSync(dynamicTguiCli)) {
+      plan.unsupported.push(`${change.file}: dynamic-tgui tools/cli.ts is unavailable; install/run prepare with dynamic-tgui first.`);
+      return;
+    }
+    const target = change.file.replace(/^tgui\//, "");
+    const outputDir = path.join(plan.moduleRoot, "tgui/converted");
+    const bunPath = this.config().get("bunPath", "bun") || "bun";
+    plan.commands.push({
+      title: `Dynamic TGUI smart convert ${target}`,
+      file: bunPath,
+      args: [
+        dynamicTguiCli,
+        "create-override",
+        "--target",
+        target,
+        "--out-dir",
+        outputDir,
+        "--upstream-ref",
+        plan.base
+      ],
+      cwd: this.root,
+      env: {
+        DYNAMIC_MODULES_HOST_ROOT: this.root,
+        DYNAMIC_TGUI_ROOT: path.join(this.root, "tgui"),
+        DYNAMIC_MODULES_INDEX: this.indexPath || path.join(this.root, DEFAULT_INDEX_PATH)
+      }
+    });
+    plan.build.tgui.add("tgui/**/*.tgui.ts");
+    plan.requires.add("dynamic-tgui");
+    plan.notes.push(`${change.file}: queued Dynamic TGUI smart converter; it will infer AST patches and only fall back to an override when needed.`);
+  }
+
+  dynamicTguiCliPath() {
+    const generatedWrapper = this.index?.generated?.tgui_cli_file
+      ? this.resolveIndexPath(this.index.generated.tgui_cli_file)
+      : null;
+    if (generatedWrapper && fs.existsSync(generatedWrapper)) {
+      return generatedWrapper;
+    }
+    const moduleRoot = this.index?.modules?.["dynamic-tgui"]?.root
+      ? this.resolveIndexPath(this.index.modules["dynamic-tgui"].root)
+      : path.join(this.root, "dynamic_modules", "installed", "dynamic-tgui");
+    return moduleRoot ? path.join(moduleRoot, "tools", "cli.ts") : null;
+  }
+
+  convertDiffToPatches(plan, change) {
+    const diff = this.git(["diff", "--unified=3", "--no-ext-diff", plan.base, "--", change.file]);
+    const baseText = this.gitShow(plan.base, change.oldFile || change.file);
+    const groups = parseUnifiedDiffGroups(diff);
+    const converted = [];
+    let offset = 1;
+    for (const group of groups) {
+      const patch = conversionGroupToPatch(change.file, group, baseText, offset);
+      if (!patch) {
+        plan.unsupported.push(`${change.file}: unsupported hunk near old line ${group.oldLine}.`);
+        continue;
+      }
+      const patchFile = uniqueModulePath(plan.moduleRoot, posixJoin("patches", `${patch.id}${patchExtensionFor(change.file)}`));
+      const patchPath = path.join(plan.moduleRoot, patchFile);
+      plan.writes.push({ path: patchPath, content: ensureTrailingNewline(patch.content) });
+      patch.file = patchFile.replace(/\\/g, "/");
+      plan.patches.push(patch);
+      converted.push(patch);
+      offset += 1;
+    }
+    return converted;
+  }
+
+  gitShow(ref, file) {
+    return this.git(["show", `${ref}:${file}`]);
+  }
+
+  git(args) {
+    return childProcess.execFileSync("git", args, {
+      cwd: this.root,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 40,
+      windowsHide: true
+    }).trimEnd();
+  }
+
+  writeConversionPlan(plan) {
+    fs.mkdirSync(plan.moduleRoot, { recursive: true });
+    if (plan.target.kind === "new" && !fs.existsSync(path.join(plan.moduleRoot, "README.md"))) {
+      plan.writes.unshift({
+        path: path.join(plan.moduleRoot, "README.md"),
+        content: `# ${plan.target.moduleName}\n\nConverted Dynamic SS13 module scaffold.\n`
+      });
+    }
+    plan.writes.push({ path: plan.manifestPath, content: plan.manifestText });
+
+    for (const copy of plan.copies) {
+      fs.mkdirSync(path.dirname(copy.to), { recursive: true });
+      fs.copyFileSync(copy.from, copy.to);
+    }
+    for (const write of plan.writes) {
+      fs.mkdirSync(path.dirname(write.path), { recursive: true });
+      fs.writeFileSync(write.path, write.content, "utf8");
+    }
+    for (const command of plan.commands) {
+      this.output.appendLine(`$ ${command.file} ${command.args.map(shellishQuote).join(" ")}`);
+      const result = childProcess.spawnSync(command.file, command.args, {
+        cwd: command.cwd,
+        env: { ...process.env, ...(command.env || {}) },
+        encoding: "utf8",
+        windowsHide: true
+      });
+      plan.commandOutputs ??= [];
+      plan.commandOutputs.push({
+        title: command.title,
+        stdout: result.stdout || "",
+        stderr: result.stderr || ""
+      });
+      this.appendCommandOutput(result.stdout, result.stderr);
+      if (result.error || result.status !== 0) {
+        throw result.error || new Error(`${command.title} failed with exit code ${result.status}`);
+      }
+    }
+  }
+
+  showConversionReport(plan) {
+    this.output.clear();
+    this.output.appendLine(`Dynamic Modules conversion: ${plan.moduleId}`);
+    this.output.appendLine(`Base: ${plan.base}`);
+    this.output.appendLine(`Module root: ${plan.moduleRoot}`);
+    this.output.appendLine("");
+    for (const copy of plan.copies) {
+      this.output.appendLine(`copy ${path.relative(this.root, copy.from)} -> ${path.relative(plan.moduleRoot, copy.to)}`);
+    }
+    for (const write of plan.writes) {
+      this.output.appendLine(`write ${path.relative(plan.moduleRoot, write.path)}`);
+    }
+    for (const command of plan.commands) {
+      this.output.appendLine(`run ${command.title}`);
+    }
+    if (plan.commandOutputs?.length) {
+      this.output.appendLine("");
+      this.output.appendLine("Command output:");
+      for (const output of plan.commandOutputs) {
+        this.output.appendLine(`## ${output.title}`);
+        if (output.stdout) {
+          this.output.append(output.stdout);
+          if (!output.stdout.endsWith("\n")) {
+            this.output.appendLine("");
+          }
+        }
+        if (output.stderr) {
+          this.output.append(output.stderr);
+          if (!output.stderr.endsWith("\n")) {
+            this.output.appendLine("");
+          }
+        }
+      }
+    }
+    for (const patch of plan.patches) {
+      this.output.appendLine(`patch ${patch.id}: ${patch.mode} ${patch.target_file}`);
+    }
+    if (plan.notes.length) {
+      this.output.appendLine("");
+      this.output.appendLine("Notes:");
+      for (const note of plan.notes) {
+        this.output.appendLine(`- ${note}`);
+      }
+    }
+    if (plan.unsupported.length) {
+      this.output.appendLine("");
+      this.output.appendLine("Skipped or needs manual conversion:");
+      for (const item of plan.unsupported) {
+        this.output.appendLine(`- ${item}`);
+      }
+    }
+    this.output.show(true);
+  }
+
   async explainCurrentFile(options = {}) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -761,6 +1279,13 @@ class ModulesProvider {
     if (!element) {
       const modules = index.modules || {};
       const items = (index.load_order || []).map((moduleId, offset) => moduleItem(moduleId, modules[moduleId] || {}, offset));
+      if (index.prepare_plugins?.length) {
+        items.unshift(groupItem("Prepare plugins", "preparePlugins", index.prepare_plugins.length));
+      }
+      const generatedCount = Object.values(index.generated || {}).filter(Boolean).length;
+      if (generatedCount) {
+        items.unshift(groupItem("Generated outputs", "generatedOutputs", generatedCount));
+      }
       if (index.warnings?.length) {
         items.unshift(groupItem("Warnings", "warnings", index.warnings.length));
       }
@@ -769,6 +1294,18 @@ class ModulesProvider {
 
     if (element.type === "warnings") {
       return (index.warnings || []).map((warning) => infoItem(warning));
+    }
+
+    if (element.type === "preparePlugins") {
+      return (index.prepare_plugins || []).map((plugin) => preparePluginTreeItem(plugin));
+    }
+
+    if (element.type === "generatedOutputs") {
+      return generatedOutputItems(this.controller, index.generated || {});
+    }
+
+    if (element.type === "preparePlugin") {
+      return element.children || [];
     }
 
     if (element.type === "module") {
@@ -809,6 +1346,21 @@ class ModulesProvider {
     if (moduleData.test_files?.length) {
       children.push(groupItem("Tests", "testFiles", moduleData.test_files.length, { moduleId }));
     }
+    if (moduleData.tgui_files?.length) {
+      children.push(groupItem("TGUI overlays", "tguiFiles", moduleData.tgui_files.length, { moduleId }));
+    }
+    if (moduleData.asset_files?.length) {
+      children.push(groupItem("Assets", "assetFiles", moduleData.asset_files.length, { moduleId }));
+    }
+    if (moduleData.prepare_plugins?.length) {
+      children.push(groupItem("Prepare plugins", "modulePreparePlugins", moduleData.prepare_plugins.length, { moduleId }));
+    }
+    if (moduleData.dynamic_dm) {
+      children.push(detailItem("Dynamic DM", capabilitySummary(moduleData.dynamic_dm)));
+    }
+    if (moduleData.dynamic_assets) {
+      children.push(detailItem("Dynamic Assets", capabilitySummary(moduleData.dynamic_assets)));
+    }
     if (moduleData.hooks?.length) {
       children.push(groupItem("Hooks", "hooks", moduleData.hooks.length, { moduleId }));
     }
@@ -832,6 +1384,20 @@ class ModulesProvider {
     }
     if (group.groupKind === "testFiles") {
       return (moduleData.test_files || []).map((filePath) => fileItem(filePath, this.controller.resolveIndexPath(filePath), "$(beaker)"));
+    }
+    if (group.groupKind === "tguiFiles") {
+      return (moduleData.tgui_files || []).map((filePath) => fileItem(filePath, this.controller.resolveIndexPath(filePath), "$(browser)"));
+    }
+    if (group.groupKind === "assetFiles") {
+      return (moduleData.asset_files || []).map((filePath) => fileItem(filePath, this.controller.resolveIndexPath(filePath), "$(symbol-color)"));
+    }
+    if (group.groupKind === "modulePreparePlugins") {
+      return (moduleData.prepare_plugins || []).map((plugin) => preparePluginTreeItem({
+        module: group.moduleId,
+        id: plugin.id,
+        command: [plugin.command, ...(plugin.args || [])],
+        description: plugin.description
+      }));
     }
     if (group.groupKind === "hooks") {
       return (moduleData.hooks || []).map((hook) => interactionTreeItem({
@@ -1017,7 +1583,7 @@ function moduleItem(moduleId, moduleData, offset) {
 
 function groupItem(label, groupKind, count, extra = {}) {
   const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
-  item.type = groupKind === "warnings" ? "warnings" : "group";
+  item.type = ["warnings", "preparePlugins", "generatedOutputs"].includes(groupKind) ? groupKind : "group";
   item.groupKind = groupKind;
   item.moduleId = extra.moduleId;
   item.description = String(count);
@@ -1069,6 +1635,41 @@ function fileItem(displayPath, resolvedPath, icon = "$(file-code)") {
   return item;
 }
 
+function generatedOutputItems(controller, generated) {
+  const entries = [
+    ["include_file", "Generated DM include", "$(file-code)"],
+    ["tests_file", "Generated test include", "$(beaker)"],
+    ["config_file", "Generated config", "$(settings-gear)"],
+    ["prepare_context_file", "Prepare context", "$(json)"],
+    ["tgui_cli_file", "Dynamic TGUI wrapper", "$(browser)"],
+    ["dynamic_dm_index_file", "Dynamic DM index", "$(symbol-class)"],
+    ["dynamic_assets_index_file", "Dynamic Assets index", "$(symbol-color)"]
+  ];
+  return entries
+    .filter(([key]) => generated[key])
+    .map(([key, label, icon]) => fileItem(label, controller.resolveIndexPath(generated[key]), icon));
+}
+
+function preparePluginTreeItem(plugin) {
+  const label = `${plugin.module || "module"}:${plugin.id || "prepare-plugin"}`;
+  const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+  item.type = "preparePlugin";
+  item.description = Array.isArray(plugin.command) ? plugin.command.join(" ") : "";
+  item.tooltip = [
+    label,
+    plugin.description || "",
+    item.description,
+    plugin.output_file || ""
+  ].filter(Boolean).join("\n");
+  item.iconPath = new vscode.ThemeIcon("tools");
+  item.children = [
+    plugin.output_file && detailItem("Output", plugin.output_file),
+    plugin.description && detailItem("Description", plugin.description),
+    ...(plugin.warnings || []).map((warning) => detailItem("Warning", warning))
+  ].filter(Boolean);
+  return item;
+}
+
 function interactionTreeItem(interaction) {
   const kind = interaction.kind === "module_patch" ? "local patch" : interaction.kind;
   const label = `${kind} ${interaction.module || "unknown"}:${interaction.id || "unknown"}`;
@@ -1091,6 +1692,11 @@ function groupIcon(kind) {
     dependencies: "references",
     dmFiles: "file-code",
     testFiles: "beaker",
+    tguiFiles: "browser",
+    assetFiles: "symbol-color",
+    modulePreparePlugins: "tools",
+    preparePlugins: "tools",
+    generatedOutputs: "archive",
     hooks: "plug",
     patches: "diff-added",
     localPatches: "diff-modified",
@@ -1103,9 +1709,15 @@ function interactionIcon(kind) {
   const icons = {
     hook: "plug",
     patch: "diff-added",
-    module_patch: "diff-modified"
+    module_patch: "diff-modified",
+    prepare_plugin: "tools"
   };
   return new vscode.ThemeIcon(icons[kind] || "symbol-event");
+}
+
+function capabilitySummary(value) {
+  const capabilities = Array.isArray(value?.capabilities) ? value.capabilities.join(", ") : "";
+  return capabilities || `api ${value?.api_version || "unknown"}`;
 }
 
 function moduleIdFromItem(item) {
@@ -1212,6 +1824,332 @@ function shellishQuote(value) {
 
 function escapeMarkdown(value) {
   return String(value).replace(/[\\`*_{}[\]()#+\-.!|]/g, "\\$&");
+}
+
+function shouldOfferConversion(file) {
+  const normalized = file.replace(/\\/g, "/");
+  if (
+    normalized.startsWith(".git/") ||
+    normalized.startsWith(".dynamic_modules_build/") ||
+    normalized.startsWith("dynamic_modules/") ||
+    normalized.startsWith("data/logs/") ||
+    normalized === "dynamic_modules.lock.json" ||
+    normalized === ".gitmodules" ||
+    normalized.endsWith(".dmb") ||
+    normalized.endsWith(".rsc")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function conversionKindLabel(file) {
+  if (isTguiSourcePath(file)) {
+    return "Dynamic TGUI smart conversion";
+  }
+  if (isDmPath(file)) {
+    return isTestDmPath(file) ? "module unit test source" : "DM source or structured patch";
+  }
+  if (isBinaryLikePath(file)) {
+    return "Dynamic Assets contribution";
+  }
+  return "structured patch candidate";
+}
+
+function planHasConvertibleOutput(plan) {
+  return Boolean(
+    plan.commands.length ||
+    plan.writes.length ||
+    plan.copies.length ||
+    plan.patches.length ||
+    Object.values(plan.build).some((values) => values.size)
+  );
+}
+
+function isDmPath(file) {
+  return file.replace(/\\/g, "/").endsWith(".dm");
+}
+
+function isTestDmPath(file) {
+  const normalized = file.replace(/\\/g, "/").toLowerCase();
+  return normalized.startsWith("tests/") || normalized.includes("/unit_tests/") || normalized.includes("/unit_test");
+}
+
+function isTguiSourcePath(file) {
+  const normalized = file.replace(/\\/g, "/");
+  return normalized.startsWith("tgui/") && /\.(tsx?|jsx?|scss|css)$/.test(normalized);
+}
+
+function isBinaryLikePath(file) {
+  return /\.(dmi|png|jpg|jpeg|gif|webp|ogg|wav|mp3|mid|midi|ttf|otf|woff2?|ico|rsc|dmb)$/i.test(file);
+}
+
+function patchExtensionFor(file) {
+  if (file.endsWith(".dm")) {
+    return ".dm";
+  }
+  const ext = path.posix.extname(file.replace(/\\/g, "/"));
+  return ext || ".txt";
+}
+
+function parseUnifiedDiffGroups(diff) {
+  const groups = [];
+  let oldLine = 0;
+  let pending = null;
+  let beforeContext = null;
+
+  const flush = (afterContext = null) => {
+    if (!pending) {
+      return;
+    }
+    pending.afterContext = afterContext;
+    groups.push(pending);
+    pending = null;
+  };
+
+  for (const line of diff.split(/\r?\n/)) {
+    if (line.startsWith("@@")) {
+      flush();
+      const match = line.match(/^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@/);
+      oldLine = match ? Number(match[1]) : 0;
+      beforeContext = null;
+      continue;
+    }
+    if (line.startsWith("---") || line.startsWith("+++") || line.startsWith("diff --git") || line.startsWith("index ")) {
+      continue;
+    }
+    if (!line || line.startsWith("\\ No newline")) {
+      continue;
+    }
+
+    const marker = line[0];
+    const text = line.slice(1);
+    if (marker === " ") {
+      const context = { text, oldLine };
+      flush(context);
+      beforeContext = context;
+      oldLine += 1;
+      continue;
+    }
+    if (marker === "-") {
+      pending ??= { removed: [], added: [], beforeContext, oldLine };
+      pending.removed.push({ text, oldLine });
+      oldLine += 1;
+      continue;
+    }
+    if (marker === "+") {
+      pending ??= { removed: [], added: [], beforeContext, oldLine };
+      pending.added.push(text);
+    }
+  }
+  flush();
+  return groups;
+}
+
+function conversionGroupToPatch(file, group, baseText, offset) {
+  const safeBase = safeIdentifier(file).slice(0, 70) || "change";
+  const id = `${safeBase}-${offset}`;
+  if (!group.removed.length && group.added.length) {
+    if (group.beforeContext) {
+      return {
+        id,
+        target_file: file,
+        mode: "insert_after",
+        anchor: group.beforeContext.text,
+        occurrence: occurrenceForLine(baseText, group.beforeContext.text, group.beforeContext.oldLine),
+        risk: "converted_branch_change",
+        description: "Converted from branch diff by the Dynamic Modules VS Code extension.",
+        content: group.added.join("\n")
+      };
+    }
+    if (group.afterContext) {
+      return {
+        id,
+        target_file: file,
+        mode: "insert_before",
+        anchor: group.afterContext.text,
+        occurrence: occurrenceForLine(baseText, group.afterContext.text, group.afterContext.oldLine),
+        risk: "converted_branch_change",
+        description: "Converted from branch diff by the Dynamic Modules VS Code extension.",
+        content: group.added.join("\n")
+      };
+    }
+    return null;
+  }
+
+  if (group.removed.length === 1 && group.added.length) {
+    const removed = group.removed[0];
+    return {
+      id,
+      target_file: file,
+      mode: "replace",
+      anchor: removed.text,
+      occurrence: occurrenceForLine(baseText, removed.text, removed.oldLine),
+      risk: "converted_branch_change",
+      description: "Converted from branch diff by the Dynamic Modules VS Code extension.",
+      content: group.added.join("\n")
+    };
+  }
+
+  return null;
+}
+
+function occurrenceForLine(source, anchor, oldLine) {
+  const lines = source.split(/\r?\n/);
+  let count = 0;
+  for (let index = 0; index < Math.min(lines.length, oldLine); index += 1) {
+    if (lines[index].includes(anchor)) {
+      count += 1;
+    }
+  }
+  return Math.max(1, count);
+}
+
+function renderNewModuleManifest(plan) {
+  const lines = [
+    `id = ${tomlString(plan.moduleId)}`,
+    `name = ${tomlString(plan.target.moduleName)}`,
+    'version = "0.1.0"',
+    'module_api = "1"',
+    `description = ${tomlString(`Converted branch changes from ${plan.base}.`)}`,
+    "",
+    "[compat]",
+    'target = "tgstation"',
+    'minimum_dynamic_modules = "0.2.0"',
+    ""
+  ];
+  if (plan.requires.size) {
+    lines.push("[load]");
+    lines.push(`requires = ${tomlArray([...plan.requires].sort())}`);
+    lines.push("");
+  }
+  lines.push("[build]");
+  lines.push(`dm_files = ${tomlArray([...plan.build.dm_files].sort())}`);
+  lines.push(`test_files = ${tomlArray([...plan.build.test_files].sort())}`);
+  if (plan.build.assets.size) {
+    lines.push(`assets = ${tomlArray([...plan.build.assets].sort())}`);
+  }
+  if (plan.build.tgui.size) {
+    lines.push(`tgui = ${tomlArray([...plan.build.tgui].sort())}`);
+  }
+  lines.push("");
+  lines.push(...renderPatchBlocks(plan.patches));
+  return ensureTrailingNewline(lines.join("\n"));
+}
+
+function updateExistingManifest(manifestPath, plan) {
+  let text = fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath, "utf8") : "";
+  if (!text.trim()) {
+    return renderNewModuleManifest(plan);
+  }
+  if (plan.requires.size) {
+    text = ensureTomlArrayValues(text, "load", "requires", [...plan.requires].sort());
+  }
+  for (const [key, values] of Object.entries(plan.build)) {
+    const items = [...values].sort();
+    if (items.length) {
+      text = ensureTomlArrayValues(text, "build", key, items);
+    }
+  }
+  const patchBlocks = renderPatchBlocks(plan.patches);
+  if (patchBlocks.length) {
+    text = `${text.trimEnd()}\n\n# Converted by Dynamic Modules VS Code extension\n${patchBlocks.join("\n")}\n`;
+  }
+  return ensureTrailingNewline(text);
+}
+
+function ensureTomlArrayValues(text, tableName, key, values) {
+  if (!values.length) {
+    return text;
+  }
+  const tableHeader = `[${tableName}]`;
+  const tableRegex = new RegExp(`(^|\\n)\\[${escapeRegExp(tableName)}\\]\\n`, "m");
+  const tableMatch = tableRegex.exec(text);
+  if (!tableMatch) {
+    return `${text.trimEnd()}\n\n${tableHeader}\n${key} = ${tomlArray(values)}\n`;
+  }
+
+  const tableStart = tableMatch.index + tableMatch[0].length;
+  const nextTableIndex = text.slice(tableStart).search(/\n\[/);
+  const tableEnd = nextTableIndex === -1 ? text.length : tableStart + nextTableIndex + 1;
+  const before = text.slice(0, tableStart);
+  let tableBody = text.slice(tableStart, tableEnd);
+  const after = text.slice(tableEnd);
+  const keyRegex = new RegExp(`^${escapeRegExp(key)}\\s*=\\s*\\[([^\\]]*)\\]`, "m");
+  const keyMatch = keyRegex.exec(tableBody);
+  if (!keyMatch) {
+    tableBody = `${key} = ${tomlArray(values)}\n${tableBody}`;
+    return before + tableBody + after;
+  }
+
+  const existing = keyMatch[1]
+    .split(",")
+    .map((item) => item.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean);
+  const merged = [...new Set([...existing, ...values])].sort();
+  tableBody = tableBody.replace(keyRegex, `${key} = ${tomlArray(merged)}`);
+  return before + tableBody + after;
+}
+
+function renderPatchBlocks(patches) {
+  return patches.flatMap((patch) => [
+    "[[patches]]",
+    `id = ${tomlString(patch.id)}`,
+    `target_file = ${tomlString(patch.target_file)}`,
+    `mode = ${tomlString(patch.mode)}`,
+    `anchor = ${tomlString(patch.anchor)}`,
+    `file = ${tomlString(patch.file)}`,
+    `occurrence = ${patch.occurrence}`,
+    `risk = ${tomlString(patch.risk)}`,
+    `description = ${tomlString(patch.description)}`,
+    ""
+  ]);
+}
+
+function titleCaseModuleId(moduleId) {
+  return moduleId
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function uniqueModulePath(moduleRoot, relativePath) {
+  const normalized = relativePath.replace(/\\/g, "/");
+  let candidate = normalized;
+  const ext = path.posix.extname(normalized);
+  const base = ext ? normalized.slice(0, -ext.length) : normalized;
+  let index = 2;
+  while (fs.existsSync(path.join(moduleRoot, candidate))) {
+    candidate = `${base}-${index}${ext}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function safeIdentifier(value) {
+  return value
+    .replace(/\\/g, "/")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+function tomlString(value) {
+  return JSON.stringify(String(value));
+}
+
+function tomlArray(values) {
+  return `[${values.map(tomlString).join(", ")}]`;
+}
+
+function ensureTrailingNewline(value) {
+  return value.endsWith("\n") ? value : `${value}\n`;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 module.exports = { activate, deactivate };

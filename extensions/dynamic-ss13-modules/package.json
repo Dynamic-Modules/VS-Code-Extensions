@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -35,10 +35,14 @@
     "onCommand:dynamicSs13Modules.openWorkspace",
     "onCommand:dynamicSs13Modules.explainCurrentFile",
     "onCommand:dynamicSs13Modules.previewCurrentFile",
+    "onCommand:dynamicSs13Modules.convertChangesToModule",
     "onCommand:dynamicSs13Modules.openIndex",
     "onCommand:dynamicSs13Modules.openGeneratedInclude",
     "onCommand:dynamicSs13Modules.openGeneratedTests",
     "onCommand:dynamicSs13Modules.openGeneratedConfig",
+    "onCommand:dynamicSs13Modules.openGeneratedTguiCli",
+    "onCommand:dynamicSs13Modules.openDynamicDmIndex",
+    "onCommand:dynamicSs13Modules.openDynamicAssetsIndex",
     "onCommand:dynamicSs13Modules.openModuleManifest",
     "onCommand:dynamicSs13Modules.addModuleRootToWorkspace",
     "onCommand:dynamicSs13Modules.copyInteractionSummary",
@@ -78,6 +82,11 @@
         "icon": "$(open-preview)"
       },
       {
+        "command": "dynamicSs13Modules.convertChangesToModule",
+        "title": "Dynamic Modules: Convert Changes to Module",
+        "icon": "$(git-pull-request-create)"
+      },
+      {
         "command": "dynamicSs13Modules.openIndex",
         "title": "Dynamic Modules: Open Generated Index",
         "icon": "$(json)"
@@ -96,6 +105,21 @@
         "command": "dynamicSs13Modules.openGeneratedConfig",
         "title": "Dynamic Modules: Open Generated Config",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "dynamicSs13Modules.openGeneratedTguiCli",
+        "title": "Dynamic Modules: Open Generated TGUI Wrapper",
+        "icon": "$(browser)"
+      },
+      {
+        "command": "dynamicSs13Modules.openDynamicDmIndex",
+        "title": "Dynamic Modules: Open Dynamic DM Index",
+        "icon": "$(symbol-class)"
+      },
+      {
+        "command": "dynamicSs13Modules.openDynamicAssetsIndex",
+        "title": "Dynamic Modules: Open Dynamic Assets Index",
+        "icon": "$(symbol-color)"
       },
       {
         "command": "dynamicSs13Modules.openModuleManifest",
@@ -129,6 +153,11 @@
           "command": "dynamicSs13Modules.prepare",
           "when": "view == dynamicSs13Modules.modules",
           "group": "navigation@2"
+        },
+        {
+          "command": "dynamicSs13Modules.convertChangesToModule",
+          "when": "view == dynamicSs13Modules.modules",
+          "group": "navigation@3"
         },
         {
           "command": "dynamicSs13Modules.explainCurrentFile",
@@ -188,6 +217,11 @@
           "default": "python3",
           "description": "Python executable used for framework commands."
         },
+        "dynamicSs13Modules.bunPath": {
+          "type": "string",
+          "default": "bun",
+          "description": "Bun executable used for Dynamic TGUI conversion tools."
+        },
         "dynamicSs13Modules.prepareScript": {
           "type": "string",
           "default": "tools/dynamic_modules/prepare.py",
@@ -219,6 +253,16 @@
           "minimum": 0,
           "maximum": 20,
           "description": "Number of surrounding lines shown in hover snippets for materialized patch output."
+        },
+        "dynamicSs13Modules.defaultConvertBase": {
+          "type": "string",
+          "default": "",
+          "description": "Default base ref used by Convert Changes to Module. When blank, the extension prefers origin/HEAD, origin/main, main, origin/master, then master."
+        },
+        "dynamicSs13Modules.defaultLocalModuleRoot": {
+          "type": "string",
+          "default": "dynamic_modules/local",
+          "description": "Default folder for new modules created by Convert Changes to Module."
         }
       }
     }

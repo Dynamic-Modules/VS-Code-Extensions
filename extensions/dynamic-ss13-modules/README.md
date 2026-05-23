@@ -18,6 +18,35 @@ VS Code.
 - commands to run `prepare`, open generated files, and generate/open the
   multi-root module workspace
 - commands to add a module root to the current VS Code workspace for quick edits
+- generated-output and prepare-plugin views for Dynamic TGUI, Dynamic DM, and
+  Dynamic Assets core-module outputs
+- `Convert Changes to Module`, which turns selected branch or working-tree
+  changes into a new module or appends them to an existing module
+
+## Convert Changes to Module
+
+Run `Dynamic Modules: Convert Changes to Module` from a host repository branch.
+The command asks for a base ref, shows the changed files, then asks whether to
+create a new module or add to an existing module.
+
+The converter is intentionally conservative:
+
+- added `.dm` files are copied as module source or module tests
+- added binary assets are copied under module assets and require `dynamic-assets`
+- modified text and `.dm` files are converted only when they can become safe
+  structured patches, such as an additive insertion or a single-line replace
+- modified `tgui/` files are passed to Dynamic TGUI's `create-override` tool,
+  which first tries to infer maintainable patch operations and only writes a
+  whole-file override when it cannot safely reproduce the edit as a patch
+- newly-added `tgui/` files are reported for manual wiring, since they usually
+  need an explicit Dynamic TGUI manifest, import rewrite, or support-file layout
+- deletions and complex hunks are reported in the Dynamic Modules output channel
+  for a maintainer to convert by hand
+
+For TGUI conversion, run `Dynamic Modules: Prepare` first when possible. The
+extension prefers the generated `.dynamic_modules_build/tgui/cli.ts` wrapper and
+falls back to the installed `dynamic-tgui/tools/cli.ts`. If Bun is not available
+as `bun` in the VS Code extension host, set `dynamicSs13Modules.bunPath`.
 
 The extension does not resolve modules by itself. Run `Dynamic Modules: Prepare`
 after changing module manifests, local module patch manifests, or framework
