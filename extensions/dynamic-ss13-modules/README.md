@@ -18,8 +18,8 @@ VS Code.
   and VS Code search operate on the post-module file contents
 - an authoring target picker for choosing whether edits go directly to the host
   repo or are written back into a selected module
-- clickable override boundary rows, changed-line highlighting, and removed-line
-  callouts for files touched by modules
+- clickable override boundary rows, removed-line CodeLens rows, and
+  changed-line highlighting for files touched by modules
 - hover snippets for hook source files and materialized patch output
 - commands to run `prepare`, open generated files, and generate/open the
   multi-root module workspace
@@ -103,7 +103,7 @@ final files without writing to either the host file or a module.
 The editor overlays mark changed regions with CodeLens rows and decorations:
 
 - `MODULAR OVERRIDE FROM: <module>` at the start of a changed block
-- red struck-through deleted source lines at the deleted position
+- deleted source lines as `diff-removed` CodeLens rows near the changed block
 - highlighted final lines inside the block
 - `END MODULAR OVERRIDE: <module>` at the end of the block
 
