@@ -81,9 +81,8 @@ from the command palette.
 The editor overlays mark changed regions with CodeLens rows and decorations:
 
 - `MODULAR OVERRIDE FROM: <module>` at the start of a changed block
+- red `REMOVED: <base line>` ghost rows at the deleted position
 - highlighted final lines inside the block
-- removed-line callouts between the start marker and changed block when the
-  base file had lines removed
 - `END MODULAR OVERRIDE: <module>` at the end of the block
 
 Click any marker row to reveal the module and current-file interaction in the

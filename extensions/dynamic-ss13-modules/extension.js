@@ -73,14 +73,14 @@ class DynamicModulesController {
       }
     });
     this.overrideRemovedDecorationType = vscode.window.createTextEditorDecorationType({
-      isWholeLine: true,
-      backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
       overviewRulerColor: new vscode.ThemeColor("editorOverviewRuler.deletedForeground"),
       overviewRulerLane: vscode.OverviewRulerLane.Right,
-      after: {
+      before: {
         color: new vscode.ThemeColor("editorError.foreground"),
+        backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
         fontStyle: "italic",
-        margin: "0 0 0 1.5em"
+        margin: "0",
+        textDecoration: "none; display: block; white-space: pre; width: 100vw; box-sizing: border-box;"
       }
     });
 
@@ -797,7 +797,20 @@ class DynamicModulesController {
     }
 
     const changedDecorations = [];
+    const removedDecorations = [];
     for (const block of blocks) {
+      if (block.hunk.removed.length) {
+        removedDecorations.push({
+          range: new vscode.Range(block.startLine, 0, block.startLine, 0),
+          hoverMessage: block.hover,
+          renderOptions: {
+            before: {
+              contentText: removedGhostText(block.hunk.removed)
+            }
+          }
+        });
+      }
+
       const lineEnd = Math.max(block.hunk.newEnd, block.hunk.newStart + 1);
       for (let line = block.hunk.newStart; line < lineEnd; line += 1) {
         const changedLine = clampLine(editor.document, line);
@@ -811,7 +824,7 @@ class DynamicModulesController {
     editor.setDecorations(this.overrideStartDecorationType, []);
     editor.setDecorations(this.overrideChangedDecorationType, changedDecorations);
     editor.setDecorations(this.overrideEndDecorationType, []);
-    editor.setDecorations(this.overrideRemovedDecorationType, []);
+    editor.setDecorations(this.overrideRemovedDecorationType, removedDecorations);
   }
 
   overrideBlocksForDocument(document, interactions = this.interactionsForDocument(document)) {
@@ -2767,21 +2780,6 @@ class InteractionCodeLensProvider {
         command: "dynamicSs13Modules.focusModuleInteraction",
         arguments: [target]
       }));
-      const visibleRemovedLines = block.hunk.removed.slice(0, 6);
-      for (const removedLine of visibleRemovedLines) {
-        lenses.push(new vscode.CodeLens(new vscode.Range(block.startLine, 0, block.startLine, 0), {
-          title: `$(diff-removed) REMOVED: ${truncateCodeLensText(removedLine.trimEnd())}`,
-          command: "dynamicSs13Modules.focusModuleInteraction",
-          arguments: [target]
-        }));
-      }
-      if (block.hunk.removed.length > visibleRemovedLines.length) {
-        lenses.push(new vscode.CodeLens(new vscode.Range(block.startLine, 0, block.startLine, 0), {
-          title: `$(ellipsis) ${block.hunk.removed.length - visibleRemovedLines.length} more removed line(s)`,
-          command: "dynamicSs13Modules.focusModuleInteraction",
-          arguments: [target]
-        }));
-      }
       lenses.push(new vscode.CodeLens(new vscode.Range(block.afterLine, 0, block.afterLine, 0), {
         title: `$(debug-stop) END MODULAR OVERRIDE: ${block.moduleLabel}`,
         command: "dynamicSs13Modules.focusModuleInteraction",
@@ -3239,9 +3237,8 @@ function languageForPath(filePath) {
   return "";
 }
 
-function truncateCodeLensText(value, limit = 140) {
-  const text = value || "(blank line)";
-  return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
+function removedGhostText(lines) {
+  return lines.map((line) => `REMOVED: ${line}`).join("\n");
 }
 
 function isLikelyAbsolute(value) {
