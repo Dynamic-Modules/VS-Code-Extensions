@@ -127,6 +127,7 @@ class DynamicModulesController {
       vscode.window.onDidChangeActiveTextEditor((editor) => {
         this.maybeOpenIntegratedFinalFile(editor);
         this.updateActiveFileState();
+        this.maybeRevealHostFileInExplorer(editor);
       }),
       vscode.workspace.onDidChangeTextDocument((event) => {
         const editor = vscode.window.activeTextEditor;
@@ -151,6 +152,7 @@ class DynamicModulesController {
     this.configureWatchers();
     this.repairStaleLiveAuthoringWorkspace();
     this.maybeOpenIntegratedFinalFile(vscode.window.activeTextEditor);
+    this.maybeRevealHostFileInExplorer(vscode.window.activeTextEditor);
   }
 
   dispose() {
@@ -503,6 +505,7 @@ class DynamicModulesController {
         preview: false,
         preserveFocus: false
       });
+      await this.revealHostFileInExplorer(key);
     } catch (error) {
       this.output.appendLine(`Could not open integrated final file for ${key}: ${error.stack || error.message}`);
     } finally {
@@ -530,6 +533,34 @@ class DynamicModulesController {
     if (entry?.editablePath) {
       await this.ensureLiveAuthoringWorkspaceFolder(entry.sessionRoot);
       await this.openPath(entry.editablePath);
+      await this.revealHostFileInExplorer(key);
+    }
+  }
+
+  async maybeRevealHostFileInExplorer(editor) {
+    if (!editor || editor.document.uri.scheme !== "file") {
+      return;
+    }
+    const authoringFile = this.authoringFileForDocument(editor.document);
+    if (!authoringFile?.target_file) {
+      return;
+    }
+    await this.revealHostFileInExplorer(authoringFile.target_file);
+  }
+
+  async revealHostFileInExplorer(targetFile) {
+    if (!this.config().get("revealHostFileInExplorer", true) || !targetFile) {
+      return;
+    }
+    const hostPath = this.resolveIndexPath(targetFile);
+    if (!hostPath || !fs.existsSync(hostPath)) {
+      return;
+    }
+    await sleep(100);
+    try {
+      await vscode.commands.executeCommand("revealInExplorer", vscode.Uri.file(hostPath));
+    } catch (error) {
+      this.output.appendLine(`Could not reveal host file in Explorer for ${targetFile}: ${error.message}`);
     }
   }
 
@@ -3306,6 +3337,10 @@ function startsWithPath(candidate, parent) {
 
 function stripLeadingSlash(value) {
   return value.replace(/^\/+/, "");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function posixJoin(...parts) {

@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -307,6 +307,11 @@
           "type": "boolean",
           "default": false,
           "description": "Add the live final authoring folder as a second workspace folder. Off by default because multi-root workspaces can make external launchers open the repo in a second VS Code window."
+        },
+        "dynamicSs13Modules.revealHostFileInExplorer": {
+          "type": "boolean",
+          "default": true,
+          "description": "When editing a live final authoring file, reveal the original host file in VS Code Explorer instead of the physical .dynamic_modules_authoring path."
         },
         "dynamicSs13Modules.repairLiveAuthoringWorkspaceWindow": {
           "type": "boolean",

@@ -78,6 +78,11 @@ open as `Untitled (Workspace)`, the extension repairs it back to a normal folder
 window automatically; you can also run `Dynamic Modules: Restore Folder Window`
 from the command palette.
 
+When a live final authoring file is active, the extension reveals the original
+host file in VS Code Explorer by default. This keeps the Explorer oriented on
+the normal repository path even though the editable buffer lives under
+`.dynamic_modules_authoring/_live/files`.
+
 The editor overlays mark changed regions with CodeLens rows and decorations:
 
 - `MODULAR OVERRIDE FROM: <module>` at the start of a changed block
