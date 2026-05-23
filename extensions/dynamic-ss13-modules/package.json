@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "1.1.11",
+  "version": "1.1.12",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {

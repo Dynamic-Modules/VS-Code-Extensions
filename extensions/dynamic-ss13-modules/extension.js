@@ -3870,7 +3870,7 @@ function languageForPath(filePath) {
 }
 
 function removedVirtualText(lines) {
-  return lines.map((line) => String(line)).join("\n");
+  return `${lines.map((line) => String(line)).join("\n")}\n`;
 }
 
 function isLikelyAbsolute(value) {
