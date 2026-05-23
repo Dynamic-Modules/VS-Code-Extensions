@@ -73,7 +73,10 @@ a second workspace root by default, because doing so turns a normal folder
 window into an untitled multi-root workspace and can make external launchers
 open a duplicate VS Code window. Enable
 `dynamicSs13Modules.addLiveFinalFolderToWorkspace` only if you explicitly want
-that multi-root workspace behavior.
+that multi-root workspace behavior. If an older live-authoring window is still
+open as `Untitled (Workspace)`, the extension repairs it back to a normal folder
+window automatically; you can also run `Dynamic Modules: Restore Folder Window`
+from the command palette.
 
 The editor overlays mark changed regions with CodeLens rows and decorations:
 

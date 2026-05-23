@@ -33,6 +33,7 @@ class DynamicModulesController {
     this.root = null;
     this.commandRunning = false;
     this.openingIntegratedFile = false;
+    this.repairingWorkspaceWindow = false;
     this.authoringManifestCache = new Map();
 
     this.decorationType = vscode.window.createTextEditorDecorationType({
@@ -102,6 +103,7 @@ class DynamicModulesController {
       vscode.commands.registerCommand("dynamicSs13Modules.prepare", () => this.prepare()),
       vscode.commands.registerCommand("dynamicSs13Modules.generateWorkspace", () => this.generateWorkspace()),
       vscode.commands.registerCommand("dynamicSs13Modules.openWorkspace", () => this.openGeneratedWorkspace()),
+      vscode.commands.registerCommand("dynamicSs13Modules.restoreFolderWindow", () => this.restoreFolderWindow()),
       vscode.commands.registerCommand("dynamicSs13Modules.explainCurrentFile", () => this.explainCurrentFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.focusModuleInteraction", (target) => this.focusModuleInteraction(target)),
       vscode.commands.registerCommand("dynamicSs13Modules.previewCurrentFile", () => this.previewCurrentFile()),
@@ -141,11 +143,13 @@ class DynamicModulesController {
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
         this.refresh(false);
         this.configureWatchers();
+        this.repairStaleLiveAuthoringWorkspace();
       })
     );
 
     this.refresh(false);
     this.configureWatchers();
+    this.repairStaleLiveAuthoringWorkspace();
     this.maybeOpenIntegratedFinalFile(vscode.window.activeTextEditor);
   }
 
@@ -642,6 +646,72 @@ class DynamicModulesController {
       uri: vscode.Uri.file(liveFilesRoot),
       name: "dynamic-final"
     });
+  }
+
+  async repairStaleLiveAuthoringWorkspace(force = false) {
+    if (this.repairingWorkspaceWindow) {
+      return;
+    }
+    if (!force && !this.config().get("repairLiveAuthoringWorkspaceWindow", true)) {
+      return;
+    }
+    if (!force && this.config().get("addLiveFinalFolderToWorkspace", false)) {
+      return;
+    }
+
+    const hostRoot = this.localHostRoot();
+    if (!hostRoot || !this.isHostWorkspaceRoot(hostRoot)) {
+      return;
+    }
+
+    const folders = vscode.workspace.workspaceFolders || [];
+    if (!folders.length) {
+      return;
+    }
+
+    const hostComparable = comparablePath(hostRoot);
+    const liveFilesRoot = path.join(this.authoringRoot(), LIVE_AUTHORING_SESSION, "files");
+    const liveComparable = comparablePath(liveFilesRoot);
+    const nonDynamicRoots = folders.filter((folder) => {
+      const folderComparable = comparablePath(folder.uri.fsPath);
+      return folderComparable !== hostComparable && folderComparable !== liveComparable;
+    });
+    if (nonDynamicRoots.length) {
+      return;
+    }
+
+    const hasLiveFinalRoot = folders.some((folder) => comparablePath(folder.uri.fsPath) === liveComparable);
+    const onlyHostRoot = folders.length === 1 && comparablePath(folders[0].uri.fsPath) === hostComparable;
+    const authoringManifest = vscode.workspace.getConfiguration(CONFIG_SECTION).get("authoringSessionManifest", "") || "";
+    const hasLiveManifestSetting = this.isLiveAuthoringManifestPath(authoringManifest);
+    if (!force && !hasLiveFinalRoot && !(onlyHostRoot && (hasLiveManifestSetting || this.isUntitledWorkspaceWindow()))) {
+      return;
+    }
+
+    this.repairingWorkspaceWindow = true;
+    try {
+      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(hostRoot), { forceNewWindow: false });
+    } catch (error) {
+      this.repairingWorkspaceWindow = false;
+      this.output.appendLine(`Could not restore folder window for ${hostRoot}: ${error.stack || error.message}`);
+    }
+  }
+
+  isLiveAuthoringManifestPath(value) {
+    if (!value || !value.trim()) {
+      return false;
+    }
+    const resolved = this.resolvePath(value.trim(), this.root);
+    const liveManifest = path.join(this.authoringRoot(), LIVE_AUTHORING_SESSION, "dynamic-authoring.json");
+    return comparablePath(resolved) === comparablePath(liveManifest);
+  }
+
+  isUntitledWorkspaceWindow() {
+    const workspaceFile = vscode.workspace.workspaceFile;
+    if (workspaceFile?.scheme === "untitled") {
+      return true;
+    }
+    return /^Untitled \(Workspace\)$/i.test(vscode.workspace.name || "");
   }
 
   updateStatusBar() {
@@ -2263,6 +2333,15 @@ class DynamicModulesController {
     await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(workspacePath), {
       forceNewWindow: false
     });
+  }
+
+  async restoreFolderWindow() {
+    const hostRoot = this.localHostRoot();
+    if (!hostRoot || !this.isHostWorkspaceRoot(hostRoot)) {
+      vscode.window.showWarningMessage("No Dynamic Modules host folder is available for this window.");
+      return;
+    }
+    await this.repairStaleLiveAuthoringWorkspace(true);
   }
 
   runFrameworkCommand(subcommand, title) {

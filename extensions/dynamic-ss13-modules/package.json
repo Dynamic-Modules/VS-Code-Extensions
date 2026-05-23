@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -33,6 +33,7 @@
     "onCommand:dynamicSs13Modules.prepare",
     "onCommand:dynamicSs13Modules.generateWorkspace",
     "onCommand:dynamicSs13Modules.openWorkspace",
+    "onCommand:dynamicSs13Modules.restoreFolderWindow",
     "onCommand:dynamicSs13Modules.explainCurrentFile",
     "onCommand:dynamicSs13Modules.focusModuleInteraction",
     "onCommand:dynamicSs13Modules.previewCurrentFile",
@@ -74,6 +75,11 @@
       {
         "command": "dynamicSs13Modules.openWorkspace",
         "title": "Dynamic Modules: Open Generated Module Workspace",
+        "icon": "$(window)"
+      },
+      {
+        "command": "dynamicSs13Modules.restoreFolderWindow",
+        "title": "Dynamic Modules: Restore Folder Window",
         "icon": "$(window)"
       },
       {
@@ -301,6 +307,11 @@
           "type": "boolean",
           "default": false,
           "description": "Add the live final authoring folder as a second workspace folder. Off by default because multi-root workspaces can make external launchers open the repo in a second VS Code window."
+        },
+        "dynamicSs13Modules.repairLiveAuthoringWorkspaceWindow": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically restore stale Dynamic Modules live-authoring workspace windows back to a normal host folder window so external launchers can reuse them."
         },
         "dynamicSs13Modules.showStatusBar": {
           "type": "boolean",
