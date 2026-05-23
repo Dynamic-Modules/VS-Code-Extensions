@@ -84,7 +84,7 @@ class DynamicModulesController {
         backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
         fontStyle: "italic",
         margin: "0",
-        textDecoration: "line-through; display: block; white-space: pre; width: 100vw; box-sizing: border-box;"
+        textDecoration: "line-through; display: block; white-space: pre; box-sizing: border-box;"
       }
     });
 
