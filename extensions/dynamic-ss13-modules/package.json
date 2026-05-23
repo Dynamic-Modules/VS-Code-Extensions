@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -36,6 +36,9 @@
     "onCommand:dynamicSs13Modules.explainCurrentFile",
     "onCommand:dynamicSs13Modules.previewCurrentFile",
     "onCommand:dynamicSs13Modules.convertChangesToModule",
+    "onCommand:dynamicSs13Modules.generateAuthoringWorkspace",
+    "onCommand:dynamicSs13Modules.deconvertAuthoringWorkspace",
+    "onCommand:dynamicSs13Modules.openAuthoringWorkspace",
     "onCommand:dynamicSs13Modules.openIndex",
     "onCommand:dynamicSs13Modules.openGeneratedInclude",
     "onCommand:dynamicSs13Modules.openGeneratedTests",
@@ -85,6 +88,21 @@
         "command": "dynamicSs13Modules.convertChangesToModule",
         "title": "Dynamic Modules: Convert Changes to Module",
         "icon": "$(git-pull-request-create)"
+      },
+      {
+        "command": "dynamicSs13Modules.generateAuthoringWorkspace",
+        "title": "Dynamic Modules: Generate Authoring Workspace",
+        "icon": "$(files)"
+      },
+      {
+        "command": "dynamicSs13Modules.deconvertAuthoringWorkspace",
+        "title": "Dynamic Modules: Deconvert Authoring Workspace",
+        "icon": "$(export)"
+      },
+      {
+        "command": "dynamicSs13Modules.openAuthoringWorkspace",
+        "title": "Dynamic Modules: Open Authoring Workspace",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "dynamicSs13Modules.openIndex",
@@ -158,6 +176,21 @@
           "command": "dynamicSs13Modules.convertChangesToModule",
           "when": "view == dynamicSs13Modules.modules",
           "group": "navigation@3"
+        },
+        {
+          "command": "dynamicSs13Modules.generateAuthoringWorkspace",
+          "when": "view == dynamicSs13Modules.modules",
+          "group": "navigation@4"
+        },
+        {
+          "command": "dynamicSs13Modules.deconvertAuthoringWorkspace",
+          "when": "view == dynamicSs13Modules.modules",
+          "group": "navigation@5"
+        },
+        {
+          "command": "dynamicSs13Modules.openAuthoringWorkspace",
+          "when": "view == dynamicSs13Modules.modules",
+          "group": "navigation@6"
         },
         {
           "command": "dynamicSs13Modules.explainCurrentFile",
@@ -263,6 +296,21 @@
           "type": "string",
           "default": "dynamic_modules/local",
           "description": "Default folder for new modules created by Convert Changes to Module."
+        },
+        "dynamicSs13Modules.authoringRoot": {
+          "type": "string",
+          "default": ".dynamic_modules_authoring",
+          "description": "Folder used for generated authoring sessions, relative to the host repo unless absolute."
+        },
+        "dynamicSs13Modules.authoringSessionManifest": {
+          "type": "string",
+          "default": "",
+          "description": "Internal path to the active authoring session manifest. Generated authoring workspaces set this automatically."
+        },
+        "dynamicSs13Modules.dynamicDmRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Dynamic DM repository or installed module root used by authoring deconversion. When blank, the extension uses the prepared dynamic-dm module from the generated index."
         }
       }
     }

@@ -22,6 +22,8 @@ VS Code.
   Dynamic Assets core-module outputs
 - `Convert Changes to Module`, which turns selected branch or working-tree
   changes into a new module or appends them to an existing module
+- authoring workspaces, which copy prepared final files into an editable folder
+  and then deconvert those edits back into a module
 
 ## Convert Changes to Module
 
@@ -51,3 +53,32 @@ as `bun` in the VS Code extension host, set `dynamicSs13Modules.bunPath`.
 The extension does not resolve modules by itself. Run `Dynamic Modules: Prepare`
 after changing module manifests, local module patch manifests, or framework
 configuration.
+
+## Authoring Workspace
+
+Run `Dynamic Modules: Generate Authoring Workspace` from a prepared host repo.
+The command runs prepare, lets you choose final files from the generated index,
+then creates `.dynamic_modules_authoring/<session>/` with:
+
+- `files/`: editable final files
+- `baseline/`: the generated final files before your edits
+- `dynamic-authoring.json`: session metadata, hashes, module interactions, and
+  source paths
+- `dynamic-authoring.code-workspace`: a two-folder workspace containing the host
+  repo and the editable authoring files
+
+After editing files under `files/`, run
+`Dynamic Modules: Deconvert Authoring Workspace`. The extension compares the
+edited files to the session baseline and writes a new module:
+
+- `.dm` edits are passed to Dynamic DM's patch generator and verified against
+  the baseline before output is accepted
+- `tgui/` edits are passed to Dynamic TGUI's smart converter, which prefers AST
+  patches and falls back to whole-file overrides when needed
+- binary assets are copied into the module and marked as Dynamic Assets content
+- unsupported text files are reported in the Dynamic Modules output channel for
+  manual conversion
+
+This flow is meant for maintainer/developer convenience. Run
+`Dynamic Modules: Prepare` afterward to regenerate the final stack and inspect
+the output before committing module changes.

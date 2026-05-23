@@ -1,5 +1,7 @@
 const childProcess = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
 
@@ -53,6 +55,9 @@ class DynamicModulesController {
       vscode.commands.registerCommand("dynamicSs13Modules.explainCurrentFile", () => this.explainCurrentFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.previewCurrentFile", () => this.previewCurrentFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.convertChangesToModule", () => this.convertChangesToModule()),
+      vscode.commands.registerCommand("dynamicSs13Modules.generateAuthoringWorkspace", () => this.generateAuthoringWorkspace()),
+      vscode.commands.registerCommand("dynamicSs13Modules.deconvertAuthoringWorkspace", () => this.deconvertAuthoringWorkspace()),
+      vscode.commands.registerCommand("dynamicSs13Modules.openAuthoringWorkspace", () => this.openAuthoringWorkspace()),
       vscode.commands.registerCommand("dynamicSs13Modules.openIndex", () => this.openIndex()),
       vscode.commands.registerCommand("dynamicSs13Modules.openGeneratedInclude", () => this.openGeneratedFile("include_file")),
       vscode.commands.registerCommand("dynamicSs13Modules.openGeneratedTests", () => this.openGeneratedFile("tests_file")),
@@ -179,10 +184,16 @@ class DynamicModulesController {
       return null;
     }
 
+    const authoringManifest = vscode.workspace.getConfiguration(CONFIG_SECTION).get("authoringSessionManifest", "") || "";
+    const authoringHostRoot = this.hostRootFromAuthoringManifest(authoringManifest);
+    if (authoringHostRoot) {
+      return authoringHostRoot;
+    }
+
     const activePath = vscode.window.activeTextEditor?.document.uri.fsPath;
     if (activePath) {
       const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(activePath));
-      if (folder) {
+      if (folder && this.isHostWorkspaceRoot(folder.uri.fsPath)) {
         return folder.uri.fsPath;
       }
     }
@@ -206,8 +217,33 @@ class DynamicModulesController {
   }
 
   resolveConfiguredIndexPath(root) {
-    const configured = this.config().get("indexPath", DEFAULT_INDEX_PATH) || DEFAULT_INDEX_PATH;
+    const configured = vscode.workspace.getConfiguration(CONFIG_SECTION, vscode.Uri.file(root)).get("indexPath", DEFAULT_INDEX_PATH) || DEFAULT_INDEX_PATH;
     return this.resolvePath(configured, root);
+  }
+
+  isHostWorkspaceRoot(root) {
+    const indexPath = this.resolveConfiguredIndexPath(root);
+    return Boolean(
+      (indexPath && fs.existsSync(indexPath)) ||
+      fs.existsSync(path.join(root, "dynamic_modules.toml"))
+    );
+  }
+
+  hostRootFromAuthoringManifest(manifestPath) {
+    if (!manifestPath || !manifestPath.trim()) {
+      return null;
+    }
+    const resolved = this.resolvePath(manifestPath.trim(), this.root);
+    if (!resolved || !fs.existsSync(resolved)) {
+      return null;
+    }
+    try {
+      const manifest = JSON.parse(fs.readFileSync(resolved, "utf8"));
+      const hostRoot = localizeAbsolutePath(manifest.host_root || "");
+      return hostRoot && this.isHostWorkspaceRoot(hostRoot) ? hostRoot : null;
+    } catch {
+      return null;
+    }
   }
 
   localHostRoot() {
@@ -618,6 +654,611 @@ class DynamicModulesController {
     } else if (action === "Show Report") {
       this.output.show(true);
     }
+  }
+
+  async generateAuthoringWorkspace() {
+    if (!this.root) {
+      vscode.window.showWarningMessage("No Dynamic Modules workspace folder is open.");
+      return;
+    }
+    const prepareResult = await this.prepare();
+    if (prepareResult !== 0) {
+      return;
+    }
+    this.refresh(false);
+    if (!this.index) {
+      vscode.window.showWarningMessage("No Dynamic Modules index found after prepare.");
+      return;
+    }
+
+    const candidates = this.authoringCandidates();
+    if (!candidates.length) {
+      vscode.window.showInformationMessage("No editable final files were found in the Dynamic Modules index.");
+      return;
+    }
+    const activeKey = vscode.window.activeTextEditor ? this.keyForDocument(vscode.window.activeTextEditor.document) : null;
+    const picks = await vscode.window.showQuickPick(candidates.map((candidate) => ({
+      label: candidate.target_file,
+      description: candidate.sourceKind,
+      detail: candidate.modules.length ? `Touched by ${candidate.modules.join(", ")}` : candidate.sourcePath,
+      picked: activeKey ? candidate.target_file === activeKey : candidate.interactions.length > 0,
+      candidate
+    })), {
+      canPickMany: true,
+      placeHolder: "Choose final files to copy into an authoring workspace"
+    });
+    if (!picks?.length) {
+      return;
+    }
+
+    const session = this.createAuthoringSession(picks.map((pick) => pick.candidate));
+    const actions = ["Open Workspace", "Open Folder", "Show Report"];
+    const action = await vscode.window.showInformationMessage(
+      `Dynamic Modules: authoring workspace generated with ${session.files.length} file${session.files.length === 1 ? "" : "s"}.`,
+      ...actions
+    );
+    if (action === "Open Workspace") {
+      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(session.workspacePath), { forceNewWindow: false });
+    } else if (action === "Open Folder") {
+      await this.openPath(session.filesRoot);
+    } else if (action === "Show Report") {
+      this.output.show(true);
+    }
+  }
+
+  authoringCandidates() {
+    const files = this.index?.files || {};
+    const candidates = [];
+    const seen = new Set();
+    for (const [targetFile, interactions] of Object.entries(files)) {
+      if (!isAuthorablePath(targetFile)) {
+        continue;
+      }
+      const sourcePath = this.finalSourcePathForAuthoring(targetFile, interactions || []);
+      if (!sourcePath || !fs.existsSync(sourcePath) || seen.has(targetFile)) {
+        continue;
+      }
+      seen.add(targetFile);
+      candidates.push({
+        target_file: targetFile,
+        sourcePath,
+        sourceKind: sourcePath.includes(`${path.sep}.dynamic_modules_build${path.sep}`) ? "materialized output" : "host source",
+        interactions: interactions || [],
+        modules: [...new Set((interactions || []).map((item) => item.module).filter(Boolean))]
+      });
+    }
+    const activeKey = vscode.window.activeTextEditor ? this.keyForDocument(vscode.window.activeTextEditor.document) : null;
+    if (activeKey && isAuthorablePath(activeKey) && !seen.has(activeKey)) {
+      const activePath = this.resolveIndexPath(activeKey);
+      if (activePath && fs.existsSync(activePath)) {
+        candidates.push({
+          target_file: activeKey,
+          sourcePath: activePath,
+          sourceKind: "active host source",
+          interactions: [],
+          modules: []
+        });
+      }
+    }
+    return candidates.sort((left, right) => left.target_file.localeCompare(right.target_file));
+  }
+
+  finalSourcePathForAuthoring(targetFile, interactions) {
+    const outputInteractions = [...interactions]
+      .filter((item) => item.output_file)
+      .reverse();
+    for (const interaction of outputInteractions) {
+      const outputPath = this.resolveBuildOutputPath(interaction.output_file);
+      if (outputPath && fs.existsSync(outputPath)) {
+        return outputPath;
+      }
+    }
+    const hostPath = this.resolveIndexPath(targetFile);
+    return hostPath && fs.existsSync(hostPath) ? hostPath : null;
+  }
+
+  createAuthoringSession(candidates) {
+    const authoringRoot = this.authoringRoot();
+    const sessionId = authoringSessionId();
+    const sessionRoot = path.join(authoringRoot, sessionId);
+    const filesRoot = path.join(sessionRoot, "files");
+    const baselineRoot = path.join(sessionRoot, "baseline");
+    const files = [];
+
+    fs.mkdirSync(filesRoot, { recursive: true });
+    fs.mkdirSync(baselineRoot, { recursive: true });
+    this.ensureLocalGitExclude(authoringRoot);
+
+    for (const candidate of candidates) {
+      const editablePath = path.join(filesRoot, candidate.target_file);
+      const baselinePath = path.join(baselineRoot, candidate.target_file);
+      fs.mkdirSync(path.dirname(editablePath), { recursive: true });
+      fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
+      fs.copyFileSync(candidate.sourcePath, editablePath);
+      fs.copyFileSync(candidate.sourcePath, baselinePath);
+      files.push({
+        target_file: candidate.target_file,
+        editable_path: path.relative(sessionRoot, editablePath).replace(/\\/g, "/"),
+        baseline_path: path.relative(sessionRoot, baselinePath).replace(/\\/g, "/"),
+        source_path: candidate.sourcePath,
+        kind: authoringKind(candidate.target_file),
+        modules: candidate.modules,
+        interactions: candidate.interactions.map((item) => ({
+          kind: item.kind,
+          module: item.module,
+          id: item.id,
+          mode: item.mode,
+          output_file: item.output_file
+        })),
+        baseline_sha256: sha256File(baselinePath)
+      });
+    }
+
+    const manifest = {
+      version: 1,
+      session_id: sessionId,
+      host_root: this.localHostRoot(),
+      index_path: this.indexPath,
+      index_generated_at: this.index?.generated_at || null,
+      created_at: new Date().toISOString(),
+      files
+    };
+    const manifestPath = path.join(sessionRoot, "dynamic-authoring.json");
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    const workspacePath = path.join(sessionRoot, "dynamic-authoring.code-workspace");
+    fs.writeFileSync(workspacePath, `${JSON.stringify({
+      folders: [
+        { name: "host", path: this.localHostRoot() },
+        { name: `authoring:${sessionId}`, path: filesRoot }
+      ],
+      settings: {
+        "dynamicSs13Modules.authoringSessionManifest": manifestPath
+      }
+    }, null, 2)}\n`, "utf8");
+
+    this.output.clear();
+    this.output.appendLine(`Dynamic Modules authoring workspace: ${sessionId}`);
+    this.output.appendLine(`Root: ${sessionRoot}`);
+    for (const file of files) {
+      this.output.appendLine(`author ${file.target_file}`);
+    }
+    return { sessionId, sessionRoot, filesRoot, manifestPath, workspacePath, files };
+  }
+
+  async openAuthoringWorkspace() {
+    const session = await this.pickAuthoringSession();
+    if (!session) {
+      return;
+    }
+    const workspacePath = path.join(session.root, "dynamic-authoring.code-workspace");
+    if (fs.existsSync(workspacePath)) {
+      await vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(workspacePath), { forceNewWindow: false });
+      return;
+    }
+    await this.openPath(path.join(session.root, "files"));
+  }
+
+  async deconvertAuthoringWorkspace() {
+    if (!this.root) {
+      vscode.window.showWarningMessage("No Dynamic Modules workspace folder is open.");
+      return;
+    }
+    const session = await this.pickAuthoringSession();
+    if (!session) {
+      return;
+    }
+    const changed = this.changedAuthoringFiles(session);
+    if (!changed.length) {
+      vscode.window.showInformationMessage("No authoring file edits were detected in that session.");
+      return;
+    }
+    const picks = await vscode.window.showQuickPick(changed.map((file) => ({
+      label: file.target_file,
+      description: file.kind,
+      detail: file.modules?.length ? `Baseline included ${file.modules.join(", ")}` : "",
+      picked: true,
+      file
+    })), {
+      canPickMany: true,
+      placeHolder: "Choose authoring edits to deconvert into a new module"
+    });
+    if (!picks?.length) {
+      return;
+    }
+    const target = await this.pickNewAuthoringModuleTarget();
+    if (!target) {
+      return;
+    }
+    const selected = picks.map((pick) => pick.file);
+    const confirm = await vscode.window.showWarningMessage(
+      `Deconvert ${selected.length} authoring edit${selected.length === 1 ? "" : "s"} into ${target.moduleId}?`,
+      { modal: true },
+      "Deconvert"
+    );
+    if (confirm !== "Deconvert") {
+      return;
+    }
+
+    try {
+      const report = this.deconvertAuthoringFiles(session, selected, target);
+      this.showAuthoringDeconvertReport(report);
+      const actions = ["Run Prepare", "Open Manifest", "Show Report"];
+      const action = await vscode.window.showInformationMessage(
+        `Dynamic Modules: deconverted authoring edits into ${target.moduleId}.`,
+        ...actions
+      );
+      if (action === "Run Prepare") {
+        await this.prepare();
+      } else if (action === "Open Manifest") {
+        await this.openPath(target.manifestPath);
+      } else if (action === "Show Report") {
+        this.output.show(true);
+      }
+    } catch (error) {
+      this.output.appendLine("");
+      this.output.appendLine(`Authoring deconvert failed: ${error.stack || error.message}`);
+      this.output.show(true);
+      vscode.window.showErrorMessage("Dynamic Modules authoring deconvert failed. See the Dynamic Modules output channel.");
+    }
+  }
+
+  async pickNewAuthoringModuleTarget() {
+    const moduleId = await vscode.window.showInputBox({
+      prompt: "New module id for deconverted authoring edits",
+      placeHolder: "repo-edits",
+      validateInput: (value) => /^[a-z0-9][a-z0-9_-]*$/.test(value)
+        ? undefined
+        : "Use lowercase letters, numbers, hyphens, or underscores."
+    });
+    if (!moduleId) {
+      return null;
+    }
+    const moduleName = await vscode.window.showInputBox({
+      prompt: "New module display name",
+      value: titleCaseModuleId(moduleId)
+    });
+    if (!moduleName) {
+      return null;
+    }
+    const defaultRoot = this.config().get("defaultLocalModuleRoot", "dynamic_modules/local") || "dynamic_modules/local";
+    const moduleRootInput = await vscode.window.showInputBox({
+      prompt: "New module folder, relative to the host repo unless absolute",
+      value: posixJoin(defaultRoot, moduleId)
+    });
+    if (!moduleRootInput) {
+      return null;
+    }
+    const moduleRoot = this.resolvePath(moduleRootInput, this.root);
+    return {
+      moduleId,
+      moduleName,
+      moduleRoot,
+      manifestPath: path.join(moduleRoot, `${moduleId}.module.toml`)
+    };
+  }
+
+  pickAuthoringSession() {
+    const root = this.authoringRoot();
+    if (!fs.existsSync(root)) {
+      vscode.window.showWarningMessage("No Dynamic Modules authoring sessions found.");
+      return Promise.resolve(null);
+    }
+    const sessions = fs.readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => {
+        const sessionRoot = path.join(root, entry.name);
+        const manifestPath = path.join(sessionRoot, "dynamic-authoring.json");
+        if (!fs.existsSync(manifestPath)) {
+          return null;
+        }
+        try {
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          return {
+            id: entry.name,
+            root: sessionRoot,
+            manifestPath,
+            manifest,
+            changedCount: this.changedAuthoringFiles({ root: sessionRoot, manifest }).length
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.id.localeCompare(left.id));
+    if (!sessions.length) {
+      vscode.window.showWarningMessage("No Dynamic Modules authoring sessions found.");
+      return Promise.resolve(null);
+    }
+    return vscode.window.showQuickPick(sessions.map((session) => ({
+      label: session.id,
+      description: `${session.changedCount} changed`,
+      detail: session.manifest.created_at || session.root,
+      session
+    })), { placeHolder: "Choose an authoring session" }).then((pick) => pick?.session || null);
+  }
+
+  changedAuthoringFiles(session) {
+    const files = session.manifest?.files || [];
+    return files.map((file) => {
+      const editablePath = path.join(session.root, file.editable_path);
+      const baselinePath = path.join(session.root, file.baseline_path);
+      return { ...file, editablePath, baselinePath };
+    }).filter((file) => {
+      if (!fs.existsSync(file.editablePath) || !fs.existsSync(file.baselinePath)) {
+        return false;
+      }
+      return sha256File(file.editablePath) !== sha256File(file.baselinePath);
+    });
+  }
+
+  deconvertAuthoringFiles(session, files, target) {
+    fs.mkdirSync(target.moduleRoot, { recursive: true });
+    const report = {
+      session,
+      target,
+      converted: [],
+      unsupported: [],
+      commandOutputs: []
+    };
+    const dmFiles = files.filter((file) => file.kind === "dm");
+    const tguiFiles = files.filter((file) => file.kind === "tgui");
+    const assetFiles = files.filter((file) => file.kind === "asset");
+    const otherFiles = files.filter((file) => !["dm", "tgui", "asset"].includes(file.kind));
+
+    if (!fs.existsSync(target.manifestPath)) {
+      fs.writeFileSync(target.manifestPath, renderAuthoringModuleManifest(target), "utf8");
+    }
+
+    const tempRepo = this.createAuthoringTempRepo(files);
+    const convertedGroups = {
+      dmFiles: [],
+      tguiFiles: [],
+      assetFiles: []
+    };
+    try {
+      if (dmFiles.length) {
+        convertedGroups.dmFiles.push(...this.runDynamicDmAuthoringConversion(tempRepo, dmFiles, target, report));
+      }
+      for (const file of tguiFiles) {
+        if (this.runDynamicTguiAuthoringConversion(tempRepo, file, target, report)) {
+          convertedGroups.tguiFiles.push(file);
+        }
+      }
+      for (const file of assetFiles) {
+        this.copyAuthoringAsset(file, target, report);
+        convertedGroups.assetFiles.push(file);
+      }
+      for (const file of otherFiles) {
+        report.unsupported.push(`${file.target_file}: no deconverter is registered for ${file.kind} files.`);
+      }
+      this.finalizeAuthoringManifest(target, convertedGroups);
+    } finally {
+      fs.rmSync(tempRepo, { recursive: true, force: true });
+    }
+    return report;
+  }
+
+  createAuthoringTempRepo(files) {
+    const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), "dynamic-modules-authoring-"));
+    for (const file of files) {
+      const tempPath = path.join(tempRepo, file.target_file);
+      fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+      fs.copyFileSync(file.baselinePath, tempPath);
+    }
+    this.gitIn(tempRepo, ["init", "-q"]);
+    this.gitIn(tempRepo, ["config", "user.name", "Dynamic Modules Authoring"]);
+    this.gitIn(tempRepo, ["config", "user.email", "dynamic-modules@example.invalid"]);
+    this.gitIn(tempRepo, ["add", "."]);
+    this.gitIn(tempRepo, ["commit", "-q", "-m", "authoring baseline"]);
+    for (const file of files) {
+      fs.copyFileSync(file.editablePath, path.join(tempRepo, file.target_file));
+    }
+    return tempRepo;
+  }
+
+  runDynamicDmAuthoringConversion(tempRepo, files, target, report) {
+    const moduleRoot = this.dynamicDmRootPath();
+    if (!moduleRoot || !fs.existsSync(path.join(moduleRoot, "dynamic_dm"))) {
+      for (const file of files) {
+        report.unsupported.push(`${file.target_file}: dynamic-dm Python module is unavailable.`);
+      }
+      return [];
+    }
+    const pythonPath = this.config().get("pythonPath", "python3") || "python3";
+    const args = [
+      "-m",
+      "dynamic_dm",
+      "migrate-modified",
+      "--repo-root",
+      tempRepo,
+      "--upstream-ref",
+      "HEAD",
+      "--module-id",
+      target.moduleId,
+      "--module-name",
+      target.moduleName,
+      "--out-dir",
+      target.moduleRoot,
+      "--targets",
+      files.map((file) => file.target_file).join(",")
+    ];
+    const result = this.spawnAuthoringCommand(pythonPath, args, moduleRoot, "Dynamic DM authoring conversion");
+    report.commandOutputs.push(result);
+    if (result.error) {
+      for (const file of files) {
+        report.unsupported.push(`${file.target_file}: Dynamic DM conversion failed.`);
+      }
+      return [];
+    }
+    const convertedTargets = parseDynamicDmConvertedTargets(result.stdout);
+    const convertedSet = new Set(convertedTargets.length ? convertedTargets : result.status === 0 ? files.map((file) => file.target_file) : []);
+    const convertedFiles = [];
+    for (const file of files) {
+      if (convertedSet.has(file.target_file)) {
+        report.converted.push(`${file.target_file}: Dynamic DM`);
+        convertedFiles.push(file);
+      } else {
+        report.unsupported.push(`${file.target_file}: Dynamic DM conversion did not produce a patch.`);
+      }
+    }
+    return convertedFiles;
+  }
+
+  runDynamicTguiAuthoringConversion(tempRepo, file, target, report) {
+    const dynamicTguiCli = this.dynamicTguiCliPath();
+    if (!dynamicTguiCli || !fs.existsSync(dynamicTguiCli)) {
+      report.unsupported.push(`${file.target_file}: Dynamic TGUI CLI is unavailable.`);
+      return;
+    }
+    const bunPath = this.config().get("bunPath", "bun") || "bun";
+    const tguiTarget = file.target_file.replace(/^tgui\//, "");
+    const outputDir = path.join(target.moduleRoot, "tgui", "converted");
+    const result = this.spawnAuthoringCommand(
+      bunPath,
+      [
+        dynamicTguiCli,
+        "create-override",
+        "--target",
+        tguiTarget,
+        "--out-dir",
+        outputDir,
+        "--upstream-ref",
+        "HEAD"
+      ],
+      tempRepo,
+      "Dynamic TGUI authoring conversion",
+      {
+        DYNAMIC_MODULES_HOST_ROOT: tempRepo,
+        DYNAMIC_TGUI_ROOT: path.join(tempRepo, "tgui"),
+        DYNAMIC_MODULES_INDEX: this.indexPath || path.join(this.root, DEFAULT_INDEX_PATH)
+      }
+    );
+    report.commandOutputs.push(result);
+    if (result.status !== 0 || result.error) {
+      report.unsupported.push(`${file.target_file}: Dynamic TGUI conversion failed.`);
+      return false;
+    }
+    report.converted.push(`${file.target_file}: Dynamic TGUI`);
+    return true;
+  }
+
+  copyAuthoringAsset(file, target, report) {
+    const relative = uniqueModulePath(target.moduleRoot, posixJoin("assets/authoring", file.target_file));
+    const outputPath = path.join(target.moduleRoot, relative);
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.copyFileSync(file.editablePath, outputPath);
+    report.converted.push(`${file.target_file}: Dynamic Assets copy`);
+  }
+
+  finalizeAuthoringManifest(target, groups) {
+    let text = fs.readFileSync(target.manifestPath, "utf8");
+    const requires = [];
+    if (groups.dmFiles.length) {
+      requires.push("dynamic-dm");
+    }
+    if (groups.tguiFiles.length) {
+      requires.push("dynamic-tgui");
+      text = ensureTomlArrayValues(text, "build", "tgui", ["tgui/**/*.tgui.ts"]);
+    }
+    if (groups.assetFiles.length) {
+      requires.push("dynamic-assets");
+      text = ensureTomlArrayValues(text, "build", "assets", ["assets/**/*"]);
+    }
+    if (requires.length) {
+      text = ensureTomlArrayValues(text, "load", "requires", requires);
+    }
+    fs.writeFileSync(target.manifestPath, ensureTrailingNewline(text), "utf8");
+  }
+
+  showAuthoringDeconvertReport(report) {
+    this.output.clear();
+    this.output.appendLine(`Dynamic Modules authoring deconvert: ${report.target.moduleId}`);
+    this.output.appendLine(`Session: ${report.session.id}`);
+    this.output.appendLine(`Module root: ${report.target.moduleRoot}`);
+    this.output.appendLine("");
+    for (const item of report.converted) {
+      this.output.appendLine(`converted ${item}`);
+    }
+    if (report.commandOutputs.length) {
+      this.output.appendLine("");
+      this.output.appendLine("Command output:");
+      for (const output of report.commandOutputs) {
+        this.output.appendLine(`## ${output.title}`);
+        this.appendCommandOutput(output.stdout, output.stderr);
+      }
+    }
+    if (report.unsupported.length) {
+      this.output.appendLine("");
+      this.output.appendLine("Skipped or needs manual conversion:");
+      for (const item of report.unsupported) {
+        this.output.appendLine(`- ${item}`);
+      }
+    }
+    this.output.show(true);
+  }
+
+  spawnAuthoringCommand(file, args, cwd, title, env = {}) {
+    this.output.appendLine(`$ ${file} ${args.map(shellishQuote).join(" ")}`);
+    const result = childProcess.spawnSync(file, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 40,
+      windowsHide: true
+    });
+    return {
+      title,
+      status: result.status,
+      error: result.error,
+      stdout: result.stdout || "",
+      stderr: result.stderr || ""
+    };
+  }
+
+  dynamicDmRootPath() {
+    const configured = this.config().get("dynamicDmRoot", "") || "";
+    if (configured.trim()) {
+      return this.resolvePath(configured.trim(), this.root);
+    }
+    const moduleRoot = this.index?.modules?.["dynamic-dm"]?.root
+      ? this.resolveIndexPath(this.index.modules["dynamic-dm"].root)
+      : path.join(this.root, "dynamic_modules", "installed", "dynamic-dm");
+    return moduleRoot;
+  }
+
+  authoringRoot() {
+    const configured = this.config().get("authoringRoot", ".dynamic_modules_authoring") || ".dynamic_modules_authoring";
+    return this.resolvePath(configured, this.root);
+  }
+
+  gitIn(cwd, args) {
+    return childProcess.execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 20,
+      windowsHide: true
+    }).trimEnd();
+  }
+
+  ensureLocalGitExclude(targetPath) {
+    const hostRoot = this.localHostRoot();
+    const gitDir = gitDirForRoot(hostRoot);
+    if (!hostRoot || !gitDir) {
+      return;
+    }
+    const relative = path.relative(hostRoot, targetPath).replace(/\\/g, "/");
+    if (!relative || relative.startsWith("../") || path.isAbsolute(relative)) {
+      return;
+    }
+    const entry = `${relative.replace(/\/+$/, "")}/`;
+    const excludePath = path.join(gitDir, "info", "exclude");
+    fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+    const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, "utf8") : "";
+    if (existing.split(/\r?\n/).includes(entry)) {
+      return;
+    }
+    fs.appendFileSync(excludePath, `${existing.endsWith("\n") || !existing ? "" : "\n"}${entry}\n`, "utf8");
   }
 
   async pickConversionBaseRef() {
@@ -1870,6 +2511,61 @@ function isDmPath(file) {
   return file.replace(/\\/g, "/").endsWith(".dm");
 }
 
+function isAuthorablePath(file) {
+  const normalized = file.replace(/\\/g, "/");
+  return !normalized.startsWith(".dynamic_modules_build/") &&
+    !normalized.startsWith(".dynamic_modules_authoring/") &&
+    !normalized.endsWith(".dmb") &&
+    !normalized.endsWith(".rsc") &&
+    (isDmPath(normalized) || isTguiSourcePath(normalized) || isBinaryLikePath(normalized) || /\.(json|toml|txt|md|css|scss|tsx?|jsx?)$/i.test(normalized));
+}
+
+function authoringKind(file) {
+  if (isDmPath(file)) {
+    return "dm";
+  }
+  if (isTguiSourcePath(file)) {
+    return "tgui";
+  }
+  if (isBinaryLikePath(file)) {
+    return "asset";
+  }
+  return "text";
+}
+
+function parseDynamicDmConvertedTargets(stdout) {
+  const targets = [];
+  for (const line of (stdout || "").split(/\r?\n/)) {
+    const match = /^CONVERTED (.+?): /.exec(line);
+    if (match) {
+      targets.push(match[1]);
+    }
+  }
+  return targets;
+}
+
+function gitDirForRoot(root) {
+  if (!root) {
+    return null;
+  }
+  const dotGit = path.join(root, ".git");
+  if (!fs.existsSync(dotGit)) {
+    return null;
+  }
+  const stats = fs.statSync(dotGit);
+  if (stats.isDirectory()) {
+    return dotGit;
+  }
+  if (!stats.isFile()) {
+    return null;
+  }
+  const match = /^gitdir:\s*(.+)\s*$/m.exec(fs.readFileSync(dotGit, "utf8"));
+  if (!match) {
+    return null;
+  }
+  return path.resolve(root, match[1]);
+}
+
 function isTestDmPath(file) {
   const normalized = file.replace(/\\/g, "/").toLowerCase();
   return normalized.startsWith("tests/") || normalized.includes("/unit_tests/") || normalized.includes("/unit_test");
@@ -2098,6 +2794,7 @@ function renderPatchBlocks(patches) {
     `target_file = ${tomlString(patch.target_file)}`,
     `mode = ${tomlString(patch.mode)}`,
     `anchor = ${tomlString(patch.anchor)}`,
+    ...(patch.end_anchor ? [`end_anchor = ${tomlString(patch.end_anchor)}`] : []),
     `file = ${tomlString(patch.file)}`,
     `occurrence = ${patch.occurrence}`,
     `risk = ${tomlString(patch.risk)}`,
@@ -2114,6 +2811,30 @@ function titleCaseModuleId(moduleId) {
     .join(" ");
 }
 
+function renderAuthoringModuleManifest(target) {
+  return ensureTrailingNewline([
+    `id = ${tomlString(target.moduleId)}`,
+    `name = ${tomlString(target.moduleName)}`,
+    'version = "0.1.0"',
+    'module_api = "1"',
+    'description = "Deconverted from a Dynamic Modules authoring workspace."',
+    "",
+    "[load]",
+    "requires = []",
+    "",
+    "[compat]",
+    'target = "tgstation"',
+    'minimum_dynamic_modules = "0.2.0"',
+    "",
+    "[build]",
+    "dm_files = []",
+    "test_files = []",
+    "assets = []",
+    "tgui = []",
+    ""
+  ].join("\n"));
+}
+
 function uniqueModulePath(moduleRoot, relativePath) {
   const normalized = relativePath.replace(/\\/g, "/");
   let candidate = normalized;
@@ -2125,6 +2846,19 @@ function uniqueModulePath(moduleRoot, relativePath) {
     index += 1;
   }
   return candidate;
+}
+
+function authoringSessionId() {
+  const now = new Date();
+  const stamp = now.toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z")
+    .replace("T", "-");
+  return stamp;
+}
+
+function sha256File(filePath) {
+  return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 function safeIdentifier(value) {
