@@ -80,7 +80,7 @@ class DynamicModulesController {
         backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
         fontStyle: "italic",
         margin: "0",
-        textDecoration: "line-through"
+        textDecoration: "line-through; display: block; white-space: pre; width: 100vw; box-sizing: border-box;"
       }
     });
 
@@ -865,7 +865,10 @@ class DynamicModulesController {
       const moduleLabel = modules.length ? modules.join(", ") : "unknown module";
       const startLine = clampLine(document, hunk.newStart);
       const endLine = clampLine(document, Math.max(hunk.newStart, hunk.newEnd - 1));
-      const afterLine = hunk.newEnd < document.lineCount ? clampLine(document, hunk.newEnd) : endLine;
+      const removedVisualRows = hunk.removed.length ? Math.max(1, hunk.removed.length) : 0;
+      const afterLine = hunk.newEnd < document.lineCount
+        ? clampLine(document, hunk.newEnd + removedVisualRows)
+        : endLine;
       const hover = new vscode.MarkdownString(undefined, true);
       hover.supportHtml = false;
       hover.appendMarkdown(`**MODULAR OVERRIDE FROM: ${escapeMarkdown(moduleLabel)}**\n\n`);
@@ -3249,7 +3252,7 @@ function languageForPath(filePath) {
 }
 
 function removedGhostText(lines) {
-  return `${lines.map((line) => `REMOVED: ${line}`).join("  |  ")}  `;
+  return lines.join("\n");
 }
 
 function isLikelyAbsolute(value) {
