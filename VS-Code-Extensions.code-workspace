@@ -1,0 +1,11 @@
+{
+  "folders": [
+    {
+      "name": "dynamic-ss13-modules-extension",
+      "path": "extensions/dynamic-ss13-modules"
+    }
+  ],
+  "settings": {
+    "files.eol": "\n"
+  }
+}

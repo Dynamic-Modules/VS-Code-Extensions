@@ -1,0 +1,226 @@
+{
+  "name": "dynamic-ss13-modules",
+  "displayName": "Dynamic SS13 Modules",
+  "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
+  "version": "0.2.0",
+  "publisher": "dynamic-modules",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dynamic-Modules/VS-Code-Extensions.git",
+    "directory": "extensions/dynamic-ss13-modules"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "BYOND",
+    "DM",
+    "SS13",
+    "tgstation",
+    "dynamic modules"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:dynamic_modules.toml",
+    "workspaceContains:.dynamic_modules_build/index.json",
+    "onView:dynamicSs13Modules.modules",
+    "onView:dynamicSs13Modules.currentFile",
+    "onCommand:dynamicSs13Modules.refresh",
+    "onCommand:dynamicSs13Modules.prepare",
+    "onCommand:dynamicSs13Modules.generateWorkspace",
+    "onCommand:dynamicSs13Modules.openWorkspace",
+    "onCommand:dynamicSs13Modules.explainCurrentFile",
+    "onCommand:dynamicSs13Modules.previewCurrentFile",
+    "onCommand:dynamicSs13Modules.openIndex",
+    "onCommand:dynamicSs13Modules.openGeneratedInclude",
+    "onCommand:dynamicSs13Modules.openGeneratedTests",
+    "onCommand:dynamicSs13Modules.openGeneratedConfig",
+    "onCommand:dynamicSs13Modules.openModuleManifest",
+    "onCommand:dynamicSs13Modules.addModuleRootToWorkspace",
+    "onCommand:dynamicSs13Modules.copyInteractionSummary",
+    "onCommand:dynamicSs13Modules.openSettings"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dynamicSs13Modules.refresh",
+        "title": "Dynamic Modules: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "dynamicSs13Modules.prepare",
+        "title": "Dynamic Modules: Prepare",
+        "icon": "$(run)"
+      },
+      {
+        "command": "dynamicSs13Modules.generateWorkspace",
+        "title": "Dynamic Modules: Generate Module Workspace",
+        "icon": "$(root-folder-opened)"
+      },
+      {
+        "command": "dynamicSs13Modules.openWorkspace",
+        "title": "Dynamic Modules: Open Generated Module Workspace",
+        "icon": "$(window)"
+      },
+      {
+        "command": "dynamicSs13Modules.explainCurrentFile",
+        "title": "Dynamic Modules: Explain Current File",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "dynamicSs13Modules.previewCurrentFile",
+        "title": "Dynamic Modules: Open Materialized File",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "dynamicSs13Modules.openIndex",
+        "title": "Dynamic Modules: Open Generated Index",
+        "icon": "$(json)"
+      },
+      {
+        "command": "dynamicSs13Modules.openGeneratedInclude",
+        "title": "Dynamic Modules: Open Generated Include",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "dynamicSs13Modules.openGeneratedTests",
+        "title": "Dynamic Modules: Open Generated Tests Include",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "dynamicSs13Modules.openGeneratedConfig",
+        "title": "Dynamic Modules: Open Generated Config",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "dynamicSs13Modules.openModuleManifest",
+        "title": "Dynamic Modules: Open Module Manifest",
+        "icon": "$(file-code)"
+      },
+      {
+        "command": "dynamicSs13Modules.addModuleRootToWorkspace",
+        "title": "Dynamic Modules: Add Module Root To Workspace",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dynamicSs13Modules.copyInteractionSummary",
+        "title": "Dynamic Modules: Copy Interaction Summary",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "dynamicSs13Modules.openSettings",
+        "title": "Dynamic Modules: Open Settings",
+        "icon": "$(gear)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dynamicSs13Modules.refresh",
+          "when": "view == dynamicSs13Modules.modules || view == dynamicSs13Modules.currentFile",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dynamicSs13Modules.prepare",
+          "when": "view == dynamicSs13Modules.modules",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dynamicSs13Modules.explainCurrentFile",
+          "when": "view == dynamicSs13Modules.currentFile",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dynamicSs13Modules.openModuleManifest",
+          "when": "view == dynamicSs13Modules.modules && viewItem == module",
+          "group": "inline@1"
+        },
+        {
+          "command": "dynamicSs13Modules.addModuleRootToWorkspace",
+          "when": "view == dynamicSs13Modules.modules && viewItem == module",
+          "group": "inline@2"
+        },
+        {
+          "command": "dynamicSs13Modules.copyInteractionSummary",
+          "when": "view == dynamicSs13Modules.currentFile && viewItem == interaction",
+          "group": "inline@1"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dynamicSs13Modules",
+          "title": "Dynamic Modules",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "dynamicSs13Modules": [
+        {
+          "id": "dynamicSs13Modules.modules",
+          "name": "Modules"
+        },
+        {
+          "id": "dynamicSs13Modules.currentFile",
+          "name": "Current File"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Dynamic SS13 Modules",
+      "properties": {
+        "dynamicSs13Modules.indexPath": {
+          "type": "string",
+          "default": ".dynamic_modules_build/index.json",
+          "description": "Path to the generated Dynamic Modules index, relative to the workspace root unless absolute."
+        },
+        "dynamicSs13Modules.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Python executable used for framework commands."
+        },
+        "dynamicSs13Modules.prepareScript": {
+          "type": "string",
+          "default": "tools/dynamic_modules/prepare.py",
+          "description": "Host-repo prepare wrapper, relative to the workspace root. Used before falling back to the framework CLI."
+        },
+        "dynamicSs13Modules.prepareCommand": {
+          "type": "string",
+          "default": "",
+          "description": "Optional shell command used instead of the built-in prepare command. Runs from the host workspace root."
+        },
+        "dynamicSs13Modules.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh views when the generated index changes."
+        },
+        "dynamicSs13Modules.showDecorations": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show editor decorations for Dynamic Modules interactions in the active file."
+        },
+        "dynamicSs13Modules.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Dynamic Modules active-file interaction count in the status bar."
+        },
+        "dynamicSs13Modules.snippetContextLines": {
+          "type": "number",
+          "default": 4,
+          "minimum": 0,
+          "maximum": 20,
+          "description": "Number of surrounding lines shown in hover snippets for materialized patch output."
+        }
+      }
+    }
+  }
+}
