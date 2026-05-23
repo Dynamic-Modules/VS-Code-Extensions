@@ -25,6 +25,8 @@ class DynamicModulesController {
     this.currentFileProvider = new CurrentFileProvider(this);
     this.codeLensProvider = new InteractionCodeLensProvider(this);
     this.hoverProvider = new InteractionHoverProvider(this);
+    this.modulesTreeView = vscode.window.createTreeView("dynamicSs13Modules.modules", { treeDataProvider: this.modulesProvider });
+    this.currentFileTreeView = vscode.window.createTreeView("dynamicSs13Modules.currentFile", { treeDataProvider: this.currentFileProvider });
     this.watchers = [];
     this.index = null;
     this.indexPath = null;
@@ -92,8 +94,8 @@ class DynamicModulesController {
       this.overrideEndDecorationType,
       this.overrideRemovedDecorationType,
       this.statusBar,
-      vscode.window.registerTreeDataProvider("dynamicSs13Modules.modules", this.modulesProvider),
-      vscode.window.registerTreeDataProvider("dynamicSs13Modules.currentFile", this.currentFileProvider),
+      this.modulesTreeView,
+      this.currentFileTreeView,
       vscode.languages.registerCodeLensProvider({ scheme: "file" }, this.codeLensProvider),
       vscode.languages.registerHoverProvider({ scheme: "file" }, this.hoverProvider),
       vscode.commands.registerCommand("dynamicSs13Modules.refresh", () => this.refresh(true)),
@@ -101,6 +103,7 @@ class DynamicModulesController {
       vscode.commands.registerCommand("dynamicSs13Modules.generateWorkspace", () => this.generateWorkspace()),
       vscode.commands.registerCommand("dynamicSs13Modules.openWorkspace", () => this.openGeneratedWorkspace()),
       vscode.commands.registerCommand("dynamicSs13Modules.explainCurrentFile", () => this.explainCurrentFile()),
+      vscode.commands.registerCommand("dynamicSs13Modules.focusModuleInteraction", (target) => this.focusModuleInteraction(target)),
       vscode.commands.registerCommand("dynamicSs13Modules.previewCurrentFile", () => this.previewCurrentFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.openIntegratedFinalFile", () => this.openIntegratedFinalFile()),
       vscode.commands.registerCommand("dynamicSs13Modules.convertChangesToModule", () => this.convertChangesToModule()),
@@ -457,6 +460,7 @@ class DynamicModulesController {
 
   updateActiveFileState() {
     this.currentFileProvider.refresh();
+    this.codeLensProvider.refresh();
     this.updateStatusBar();
     this.updateDecorations();
   }
@@ -713,8 +717,8 @@ class DynamicModulesController {
       editor.setDecorations(this.overrideRemovedDecorationType, []);
       return;
     }
-    const targetFile = this.keyForDocument(editor.document);
-    if (!targetFile || !interactions.length) {
+    const blocks = this.overrideBlocksForDocument(editor.document, interactions);
+    if (!blocks.length) {
       editor.setDecorations(this.overrideStartDecorationType, []);
       editor.setDecorations(this.overrideChangedDecorationType, []);
       editor.setDecorations(this.overrideEndDecorationType, []);
@@ -722,44 +726,52 @@ class DynamicModulesController {
       return;
     }
 
+    const changedDecorations = [];
+    for (const block of blocks) {
+      const lineEnd = Math.max(block.hunk.newEnd, block.hunk.newStart + 1);
+      for (let line = block.hunk.newStart; line < lineEnd; line += 1) {
+        const changedLine = clampLine(editor.document, line);
+        changedDecorations.push({
+          range: editor.document.lineAt(changedLine).range,
+          hoverMessage: block.hover
+        });
+      }
+    }
+
+    editor.setDecorations(this.overrideStartDecorationType, []);
+    editor.setDecorations(this.overrideChangedDecorationType, changedDecorations);
+    editor.setDecorations(this.overrideEndDecorationType, []);
+    editor.setDecorations(this.overrideRemovedDecorationType, []);
+  }
+
+  overrideBlocksForDocument(document, interactions = this.interactionsForDocument(document)) {
+    if (!this.config().get("showInlineOverrideBlocks", true)) {
+      return [];
+    }
+    const targetFile = this.keyForDocument(document);
+    if (!targetFile || !interactions.length) {
+      return [];
+    }
+
     const basePath = this.resolveIndexPath(targetFile);
     if (!basePath || !fs.existsSync(basePath)) {
-      editor.setDecorations(this.overrideStartDecorationType, []);
-      editor.setDecorations(this.overrideChangedDecorationType, []);
-      editor.setDecorations(this.overrideEndDecorationType, []);
-      editor.setDecorations(this.overrideRemovedDecorationType, []);
-      return;
+      return [];
     }
     let baseText;
     try {
       baseText = fs.readFileSync(basePath, "utf8");
     } catch {
-      editor.setDecorations(this.overrideStartDecorationType, []);
-      editor.setDecorations(this.overrideChangedDecorationType, []);
-      editor.setDecorations(this.overrideEndDecorationType, []);
-      editor.setDecorations(this.overrideRemovedDecorationType, []);
-      return;
+      return [];
     }
 
-    const finalText = editor.document.getText();
-    const hunks = diffLineHunks(baseText, finalText);
-    if (!hunks.length) {
-      editor.setDecorations(this.overrideStartDecorationType, []);
-      editor.setDecorations(this.overrideChangedDecorationType, []);
-      editor.setDecorations(this.overrideEndDecorationType, []);
-      editor.setDecorations(this.overrideRemovedDecorationType, []);
-      return;
-    }
-
-    const startDecorations = [];
-    const changedDecorations = [];
-    const endDecorations = [];
-    const removedDecorations = [];
-    for (const hunk of hunks) {
-      const modules = modulesForHunk(hunk, interactions);
+    const hunks = diffLineHunks(baseText, document.getText());
+    return hunks.map((hunk, index) => {
+      const hunkInteractions = interactionsForHunk(hunk, interactions);
+      const modules = [...new Set(hunkInteractions.map((interaction) => interaction.module).filter(Boolean))].sort();
       const moduleLabel = modules.length ? modules.join(", ") : "unknown module";
-      const startLine = clampLine(editor.document, hunk.newStart);
-      const endLine = clampLine(editor.document, Math.max(hunk.newStart, hunk.newEnd - 1));
+      const startLine = clampLine(document, hunk.newStart);
+      const endLine = clampLine(document, Math.max(hunk.newStart, hunk.newEnd - 1));
+      const afterLine = hunk.newEnd < document.lineCount ? clampLine(document, hunk.newEnd) : endLine;
       const hover = new vscode.MarkdownString(undefined, true);
       hover.supportHtml = false;
       hover.appendMarkdown(`**MODULAR OVERRIDE FROM: ${escapeMarkdown(moduleLabel)}**\n\n`);
@@ -768,57 +780,47 @@ class DynamicModulesController {
         hover.appendMarkdown("_Removed base lines:_\n\n");
         hover.appendCodeblock(hunk.removed.join("\n"), languageForPath(targetFile));
       }
-
-      startDecorations.push({
-        range: new vscode.Range(startLine, 0, startLine, 0),
-        hoverMessage: hover,
-        renderOptions: {
-          before: {
-            contentText: `MODULAR OVERRIDE FROM: ${moduleLabel}  `
-          }
-        }
-      });
-
-      for (let line = hunk.newStart; line < Math.max(hunk.newEnd, hunk.newStart + 1); line += 1) {
-        const changedLine = clampLine(editor.document, line);
-        changedDecorations.push({
-          range: editor.document.lineAt(changedLine).range,
-          hoverMessage: hover
-        });
+      if (hunk.added.length) {
+        hover.appendMarkdown("_Final lines:_\n\n");
+        hover.appendCodeblock(hunk.added.join("\n"), languageForPath(targetFile));
       }
+      return {
+        index,
+        hunk,
+        interactions: hunkInteractions,
+        modules,
+        moduleLabel,
+        targetFile,
+        startLine,
+        endLine,
+        afterLine,
+        hover
+      };
+    });
+  }
 
-      if (hunk.removed.length) {
-        const removedText = hunk.removed
-          .slice(0, 3)
-          .map((line) => line.trimEnd())
-          .join("  |  ");
-        const suffix = hunk.removed.length > 3 ? `  |  ... ${hunk.removed.length - 3} more removed line(s)` : "";
-        removedDecorations.push({
-          range: editor.document.lineAt(startLine).range,
-          hoverMessage: hover,
-          renderOptions: {
-            after: {
-              contentText: `  REMOVED: ${removedText}${suffix}`
-            }
-          }
-        });
-      }
+  focusTargetForBlock(block) {
+    const interaction = block.interactions[0] || {};
+    return {
+      moduleId: block.modules[0] || interaction.module || null,
+      targetFile: block.targetFile,
+      interactionKey: interactionKey(interaction),
+      interactionKind: interaction.kind || null,
+      interactionId: interaction.id || null,
+      anchorLine: interaction.anchor_line || null,
+      hunkIndex: block.index
+    };
+  }
 
-      endDecorations.push({
-        range: editor.document.lineAt(endLine).range,
-        hoverMessage: hover,
-        renderOptions: {
-          after: {
-            contentText: `  END MODULAR OVERRIDE: ${moduleLabel}`
-          }
-        }
-      });
-    }
-
-    editor.setDecorations(this.overrideStartDecorationType, startDecorations);
-    editor.setDecorations(this.overrideChangedDecorationType, changedDecorations);
-    editor.setDecorations(this.overrideEndDecorationType, endDecorations);
-    editor.setDecorations(this.overrideRemovedDecorationType, removedDecorations);
+  focusTargetForInteraction(interaction) {
+    return {
+      moduleId: interaction.module || null,
+      targetFile: interaction.target_file || null,
+      interactionKey: interactionKey(interaction),
+      interactionKind: interaction.kind || null,
+      interactionId: interaction.id || null,
+      anchorLine: interaction.anchor_line || null
+    };
   }
 
   shortInteractionLabel(interaction) {
@@ -2145,6 +2147,61 @@ class DynamicModulesController {
     this.output.show(true);
   }
 
+  async focusModuleInteraction(target = {}) {
+    if (!this.index) {
+      vscode.window.showWarningMessage("No Dynamic Modules index found. Run Dynamic Modules: Prepare.");
+      return;
+    }
+
+    try {
+      await vscode.commands.executeCommand("workbench.view.extension.dynamicSs13Modules");
+    } catch {
+      // Older VS Code builds may not expose a container focus command.
+    }
+
+    const moduleId = target.moduleId || target.module || null;
+    this.currentFileProvider.focusInteraction(target);
+    this.modulesProvider.focusModule(moduleId);
+    this.currentFileProvider.refresh();
+    this.modulesProvider.refresh();
+
+    const revealOptions = { select: true, focus: true, expand: true };
+    if (moduleId && this.modulesTreeView) {
+      const moduleElement = this.modulesProvider.findModuleElement(moduleId);
+      if (moduleElement) {
+        try {
+          await this.modulesTreeView.reveal(moduleElement, { ...revealOptions, focus: false });
+        } catch (error) {
+          this.output.appendLine(`Could not reveal module ${moduleId}: ${error.message}`);
+        }
+      }
+    }
+
+    const interactionElement = this.currentFileProvider.findInteractionElement(target);
+    if (interactionElement && this.currentFileTreeView) {
+      try {
+        await this.currentFileTreeView.reveal(interactionElement, revealOptions);
+        return;
+      } catch (error) {
+        this.output.appendLine(`Could not reveal current-file interaction: ${error.message}`);
+      }
+    }
+
+    if (moduleId && this.modulesTreeView) {
+      const moduleElement = this.modulesProvider.findModuleElement(moduleId);
+      if (moduleElement) {
+        try {
+          await this.modulesTreeView.reveal(moduleElement, revealOptions);
+          return;
+        } catch (error) {
+          this.output.appendLine(`Could not reveal module ${moduleId}: ${error.message}`);
+        }
+      }
+    }
+
+    await this.explainCurrentFile();
+  }
+
   formatInteraction(interaction) {
     const lines = [`- ${this.shortInteractionLabel(interaction)}`];
     for (const line of this.interactionSummaryLines(interaction)) {
@@ -2321,10 +2378,28 @@ class ModulesProvider {
     this.controller = controller;
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+    this.focusedModuleId = null;
   }
 
   refresh() {
     this._onDidChangeTreeData.fire();
+  }
+
+  focusModule(moduleId) {
+    this.focusedModuleId = moduleId || null;
+  }
+
+  findModuleElement(moduleId) {
+    if (!moduleId) {
+      return null;
+    }
+    const modules = this.controller.index?.modules || {};
+    if (!modules[moduleId]) {
+      return null;
+    }
+    const loadOrder = this.controller.index?.load_order || Object.keys(modules);
+    const offset = Math.max(0, loadOrder.indexOf(moduleId));
+    return moduleItem(moduleId, modules[moduleId], offset, moduleId === this.focusedModuleId);
   }
 
   getTreeItem(element) {
@@ -2342,7 +2417,9 @@ class ModulesProvider {
 
     if (!element) {
       const modules = index.modules || {};
-      const items = (index.load_order || []).map((moduleId, offset) => moduleItem(moduleId, modules[moduleId] || {}, offset));
+      const items = (index.load_order || []).map((moduleId, offset) => (
+        moduleItem(moduleId, modules[moduleId] || {}, offset, moduleId === this.focusedModuleId)
+      ));
       if (index.prepare_plugins?.length) {
         items.unshift(groupItem("Prepare plugins", "preparePlugins", index.prepare_plugins.length));
       }
@@ -2509,10 +2586,25 @@ class CurrentFileProvider {
     this.controller = controller;
     this._onDidChangeTreeData = new vscode.EventEmitter();
     this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+    this.focusedInteractionKey = null;
   }
 
   refresh() {
     this._onDidChangeTreeData.fire();
+  }
+
+  focusInteraction(target) {
+    this.focusedInteractionKey = interactionKeyFromFocusTarget(target);
+  }
+
+  findInteractionElement(target) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.uri.scheme !== "file") {
+      return null;
+    }
+    const interactions = this.controller.interactionsForDocument(editor.document);
+    const interaction = interactions.find((candidate) => interactionMatchesFocusTarget(candidate, target));
+    return interaction ? interactionTreeItem(interaction, interactionKey(interaction) === this.focusedInteractionKey) : null;
   }
 
   getTreeItem(element) {
@@ -2529,7 +2621,9 @@ class CurrentFileProvider {
       return [infoItem("No interactions", "No generated index entries target this file.")];
     }
     if (!element) {
-      return interactions.map((interaction) => interactionTreeItem(interaction));
+      return interactions.map((interaction) => (
+        interactionTreeItem(interaction, interactionKey(interaction) === this.focusedInteractionKey)
+      ));
     }
     if (element.type === "interaction") {
       return this.interactionChildren(element.interaction);
@@ -2583,7 +2677,43 @@ class InteractionCodeLensProvider {
       })
     ];
 
+    const blockInteractionKeys = new Set();
+    for (const block of this.controller.overrideBlocksForDocument(document, interactions)) {
+      const target = this.controller.focusTargetForBlock(block);
+      for (const interaction of block.interactions) {
+        blockInteractionKeys.add(interactionKey(interaction));
+      }
+      lenses.push(new vscode.CodeLens(new vscode.Range(block.startLine, 0, block.startLine, 0), {
+        title: `$(symbol-event) MODULAR OVERRIDE FROM: ${block.moduleLabel}`,
+        command: "dynamicSs13Modules.focusModuleInteraction",
+        arguments: [target]
+      }));
+      const visibleRemovedLines = block.hunk.removed.slice(0, 6);
+      for (const removedLine of visibleRemovedLines) {
+        lenses.push(new vscode.CodeLens(new vscode.Range(block.startLine, 0, block.startLine, 0), {
+          title: `$(diff-removed) REMOVED: ${truncateCodeLensText(removedLine.trimEnd())}`,
+          command: "dynamicSs13Modules.focusModuleInteraction",
+          arguments: [target]
+        }));
+      }
+      if (block.hunk.removed.length > visibleRemovedLines.length) {
+        lenses.push(new vscode.CodeLens(new vscode.Range(block.startLine, 0, block.startLine, 0), {
+          title: `$(ellipsis) ${block.hunk.removed.length - visibleRemovedLines.length} more removed line(s)`,
+          command: "dynamicSs13Modules.focusModuleInteraction",
+          arguments: [target]
+        }));
+      }
+      lenses.push(new vscode.CodeLens(new vscode.Range(block.afterLine, 0, block.afterLine, 0), {
+        title: `$(debug-stop) END MODULAR OVERRIDE: ${block.moduleLabel}`,
+        command: "dynamicSs13Modules.focusModuleInteraction",
+        arguments: [target]
+      }));
+    }
+
     for (const interaction of interactions) {
+      if (blockInteractionKeys.has(interactionKey(interaction))) {
+        continue;
+      }
       const lineNumber = Number(interaction.anchor_line);
       if (!Number.isInteger(lineNumber)) {
         continue;
@@ -2591,7 +2721,8 @@ class InteractionCodeLensProvider {
       const line = Math.max(0, Math.min(document.lineCount - 1, lineNumber - 1));
       lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
         title: this.controller.shortInteractionLabel(interaction),
-        command: "dynamicSs13Modules.explainCurrentFile"
+        command: "dynamicSs13Modules.focusModuleInteraction",
+        arguments: [this.controller.focusTargetForInteraction(interaction)]
       }));
     }
     return lenses;
@@ -2629,19 +2760,22 @@ class InteractionHoverProvider {
   }
 }
 
-function moduleItem(moduleId, moduleData, offset) {
+function moduleItem(moduleId, moduleData, offset, focused = false) {
   const item = new vscode.TreeItem(`${offset + 1}. ${moduleId}`, vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = moduleTreeItemId(moduleId);
   item.type = "module";
   item.moduleId = moduleId;
   item.moduleData = moduleData;
   item.contextValue = "module";
-  item.description = moduleData.version || "";
+  item.description = focused ? `${moduleData.version || ""} selected`.trim() : moduleData.version || "";
   item.tooltip = [
     moduleData.name || moduleId,
     moduleData.root || "",
     moduleData.source?.repo || ""
   ].filter(Boolean).join("\n");
-  item.iconPath = new vscode.ThemeIcon("package");
+  item.iconPath = focused
+    ? new vscode.ThemeIcon("arrow-right", new vscode.ThemeColor("charts.blue"))
+    : new vscode.ThemeIcon("package");
   return item;
 }
 
@@ -2734,20 +2868,25 @@ function preparePluginTreeItem(plugin) {
   return item;
 }
 
-function interactionTreeItem(interaction) {
+function interactionTreeItem(interaction, focused = false) {
   const kind = interaction.kind === "module_patch" ? "local patch" : interaction.kind;
   const label = `${kind} ${interaction.module || "unknown"}:${interaction.id || "unknown"}`;
   const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+  item.id = `interaction:${interactionKey(interaction)}`;
   item.type = "interaction";
   item.interaction = interaction;
   item.contextValue = "interaction";
-  item.description = interaction.anchor_line ? `line ${interaction.anchor_line}` : interaction.mode || "";
+  item.description = focused
+    ? `${interaction.anchor_line ? `line ${interaction.anchor_line}` : interaction.mode || ""} selected`.trim()
+    : interaction.anchor_line ? `line ${interaction.anchor_line}` : interaction.mode || "";
   item.tooltip = [
     label,
     interaction.target_file || interaction.target || "",
     interaction.output_file || interaction.source_file || ""
   ].filter(Boolean).join("\n");
-  item.iconPath = interactionIcon(interaction.kind);
+  item.iconPath = focused
+    ? new vscode.ThemeIcon("arrow-right", new vscode.ThemeColor("charts.blue"))
+    : interactionIcon(interaction.kind);
   return item;
 }
 
@@ -2796,6 +2935,60 @@ function moduleIdFromItem(item) {
 
 function interactionFromItem(item) {
   return item?.interaction || null;
+}
+
+function moduleTreeItemId(moduleId) {
+  return `module:${moduleId || "unknown"}`;
+}
+
+function interactionKey(interaction = {}) {
+  return [
+    interaction.kind || "",
+    interaction.module || "",
+    interaction.id || "",
+    interaction.target_file || interaction.target || "",
+    interaction.anchor_line || ""
+  ].join("\u001f");
+}
+
+function interactionKeyFromFocusTarget(target = {}) {
+  if (target.interactionKey) {
+    return target.interactionKey;
+  }
+  return [
+    target.interactionKind || target.kind || "",
+    target.moduleId || target.module || "",
+    target.interactionId || target.id || "",
+    target.targetFile || target.target_file || target.target || "",
+    target.anchorLine || target.anchor_line || ""
+  ].join("\u001f");
+}
+
+function interactionMatchesFocusTarget(interaction, target = {}) {
+  if (!interaction) {
+    return false;
+  }
+  if (target.interactionKey && interactionKey(interaction) === target.interactionKey) {
+    return true;
+  }
+  if ((target.moduleId || target.module) && interaction.module !== (target.moduleId || target.module)) {
+    return false;
+  }
+  if ((target.interactionId || target.id) && interaction.id !== (target.interactionId || target.id)) {
+    return false;
+  }
+  if ((target.interactionKind || target.kind) && interaction.kind !== (target.interactionKind || target.kind)) {
+    return false;
+  }
+  const targetFile = target.targetFile || target.target_file;
+  if (targetFile && interaction.target_file && comparablePath(interaction.target_file) !== comparablePath(targetFile)) {
+    return false;
+  }
+  const anchor = target.anchorLine || target.anchor_line;
+  if (anchor && Number(interaction.anchor_line) !== Number(anchor)) {
+    return false;
+  }
+  return true;
 }
 
 function readFileSnippet(filePath, anchorLine, contextLines) {
@@ -2923,14 +3116,19 @@ function lcsDiffHunks(oldLines, newLines, offset) {
   return hunks;
 }
 
-function modulesForHunk(hunk, interactions) {
+function interactionsForHunk(hunk, interactions) {
   const oldStartLine = hunk.oldStart + 1;
   const oldEndLine = Math.max(oldStartLine, hunk.oldEnd);
   const matching = interactions
     .filter((interaction) => {
       const anchor = Number(interaction.anchor_line);
       return Number.isInteger(anchor) && anchor >= oldStartLine - 3 && anchor <= oldEndLine + 3;
-    })
+    });
+  return matching.length ? matching : interactions;
+}
+
+function modulesForHunk(hunk, interactions) {
+  const matching = interactionsForHunk(hunk, interactions)
     .map((interaction) => interaction.module)
     .filter(Boolean);
   const modules = matching.length
@@ -2960,6 +3158,11 @@ function languageForPath(filePath) {
     return "toml";
   }
   return "";
+}
+
+function truncateCodeLensText(value, limit = 140) {
+  const text = value || "(blank line)";
+  return text.length > limit ? `${text.slice(0, limit - 1)}...` : text;
 }
 
 function isLikelyAbsolute(value) {

@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -34,6 +34,7 @@
     "onCommand:dynamicSs13Modules.generateWorkspace",
     "onCommand:dynamicSs13Modules.openWorkspace",
     "onCommand:dynamicSs13Modules.explainCurrentFile",
+    "onCommand:dynamicSs13Modules.focusModuleInteraction",
     "onCommand:dynamicSs13Modules.previewCurrentFile",
     "onCommand:dynamicSs13Modules.openIntegratedFinalFile",
     "onCommand:dynamicSs13Modules.convertChangesToModule",
@@ -289,7 +290,7 @@
         "dynamicSs13Modules.showInlineOverrideBlocks": {
           "type": "boolean",
           "default": true,
-          "description": "Show blue module override boundaries, changed-line highlighting, and removed-line callouts in editors."
+          "description": "Show clickable module override boundary CodeLens rows, changed-line highlighting, and removed-line callouts in editors."
         },
         "dynamicSs13Modules.autoOpenFinalFiles": {
           "type": "boolean",

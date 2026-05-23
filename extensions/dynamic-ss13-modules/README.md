@@ -16,7 +16,7 @@ VS Code.
 - inline line decorations for structured patches and local module source patches
 - automatic live final files for materialized module edits, so normal editing
   and VS Code search operate on the post-module file contents
-- blue inline override boundaries, changed-line highlighting, and removed-line
+- clickable override boundary rows, changed-line highlighting, and removed-line
   callouts for files touched by modules
 - hover snippets for hook source files and materialized patch output
 - commands to run `prepare`, open generated files, and generate/open the
@@ -75,12 +75,17 @@ open a duplicate VS Code window. Enable
 `dynamicSs13Modules.addLiveFinalFolderToWorkspace` only if you explicitly want
 that multi-root workspace behavior.
 
-The editor overlays mark changed regions with:
+The editor overlays mark changed regions with CodeLens rows and decorations:
 
 - `MODULAR OVERRIDE FROM: <module>` at the start of a changed block
 - highlighted final lines inside the block
-- red removed-line callouts when the base file had lines removed
+- removed-line callouts between the start marker and changed block when the
+  base file had lines removed
 - `END MODULAR OVERRIDE: <module>` at the end of the block
+
+Click any marker row to reveal the module and current-file interaction in the
+Dynamic Modules sidebar. The marker rows are editor UI, not document text, so
+they do not change line numbers or saved file contents.
 
 Edit the `dynamic-final` files normally, then run
 `Dynamic Modules: Deconvert Authoring Workspace` to convert those edits back
