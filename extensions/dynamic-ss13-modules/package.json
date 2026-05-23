@@ -2,7 +2,7 @@
   "name": "dynamic-ss13-modules",
   "displayName": "Dynamic SS13 Modules",
   "description": "Maintainer tools for Dynamic SS13 Modules host repositories.",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "publisher": "dynamic-modules",
   "license": "AGPL-3.0-or-later",
   "repository": {
@@ -34,6 +34,8 @@
     "onCommand:dynamicSs13Modules.generateWorkspace",
     "onCommand:dynamicSs13Modules.openWorkspace",
     "onCommand:dynamicSs13Modules.restoreFolderWindow",
+    "onCommand:dynamicSs13Modules.selectAuthoringTarget",
+    "onCommand:dynamicSs13Modules.setAuthoringTargetModule",
     "onCommand:dynamicSs13Modules.explainCurrentFile",
     "onCommand:dynamicSs13Modules.focusModuleInteraction",
     "onCommand:dynamicSs13Modules.previewCurrentFile",
@@ -81,6 +83,16 @@
         "command": "dynamicSs13Modules.restoreFolderWindow",
         "title": "Dynamic Modules: Restore Folder Window",
         "icon": "$(window)"
+      },
+      {
+        "command": "dynamicSs13Modules.selectAuthoringTarget",
+        "title": "Dynamic Modules: Select Authoring Target",
+        "icon": "$(target)"
+      },
+      {
+        "command": "dynamicSs13Modules.setAuthoringTargetModule",
+        "title": "Dynamic Modules: Edit For This Module",
+        "icon": "$(edit)"
       },
       {
         "command": "dynamicSs13Modules.explainCurrentFile",
@@ -176,6 +188,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "dynamicSs13Modules.selectAuthoringTarget",
+          "when": "view == dynamicSs13Modules.modules || view == dynamicSs13Modules.currentFile",
+          "group": "navigation@0"
+        },
+        {
           "command": "dynamicSs13Modules.refresh",
           "when": "view == dynamicSs13Modules.modules || view == dynamicSs13Modules.currentFile",
           "group": "navigation@1"
@@ -217,6 +234,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "dynamicSs13Modules.setAuthoringTargetModule",
+          "when": "view == dynamicSs13Modules.modules && viewItem == module",
+          "group": "inline@0"
+        },
         {
           "command": "dynamicSs13Modules.openModuleManifest",
           "when": "view == dynamicSs13Modules.modules && viewItem == module",
@@ -317,6 +339,11 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically restore stale Dynamic Modules live-authoring workspace windows back to a normal host folder window so external launchers can reuse them."
+        },
+        "dynamicSs13Modules.autoWriteAuthoringEdits": {
+          "type": "boolean",
+          "default": true,
+          "description": "When editing a live final authoring file, automatically write saves to the selected authoring target. Direct mode mirrors to the base file; module mode deconverts saved edits into the selected module."
         },
         "dynamicSs13Modules.showStatusBar": {
           "type": "boolean",

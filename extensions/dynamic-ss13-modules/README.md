@@ -16,6 +16,8 @@ VS Code.
 - inline line decorations for structured patches and local module source patches
 - automatic live final files for materialized module edits, so normal editing
   and VS Code search operate on the post-module file contents
+- an authoring target picker for choosing whether edits go directly to the host
+  repo or are written back into a selected module
 - clickable override boundary rows, changed-line highlighting, and removed-line
   callouts for files touched by modules
 - hover snippets for hook source files and materialized patch output
@@ -83,6 +85,21 @@ host file in VS Code Explorer by default. This keeps the Explorer oriented on
 the normal repository path even though the editable buffer lives under
 `.dynamic_modules_authoring/_live/files`.
 
+Use `Dynamic Modules: Select Authoring Target`, the status bar item, or the
+Authoring target row in the Dynamic Modules sidebar to choose where edits go:
+
+- `Direct host files` keeps normal host files as the edit target. If you switch
+  to this mode while a live final file is open, the extension mirrors the live
+  buffer back onto the real host file and opens that host file.
+- `Module auto` uses the first module touching the active file.
+- selecting a specific module records that module on the live authoring file;
+  saving the file deconverts the edit back into that module.
+
+The same picker is available from each module row through `Edit For This
+Module`. Disable automatic save routing with
+`dynamicSs13Modules.autoWriteAuthoringEdits` if you want to inspect or edit live
+final files without writing to either the host file or a module.
+
 The editor overlays mark changed regions with CodeLens rows and decorations:
 
 - `MODULAR OVERRIDE FROM: <module>` at the start of a changed block
@@ -94,9 +111,11 @@ Click any marker row to reveal the module and current-file interaction in the
 Dynamic Modules sidebar. The marker rows are editor UI, not document text, so
 they do not change line numbers or saved file contents.
 
-Edit the `dynamic-final` files normally, then run
-`Dynamic Modules: Deconvert Authoring Workspace` to convert those edits back
-into a module. Disable this automatic behavior with
+Edit the `dynamic-final` files normally. Saved edits are routed to the selected
+authoring target; you can also run
+`Dynamic Modules: Deconvert Authoring Workspace` to convert a batch of edits
+back into the selected module or another module. Disable automatic live-final
+opening with
 `dynamicSs13Modules.autoOpenFinalFiles` if you want to inspect untouched host
 files directly.
 
