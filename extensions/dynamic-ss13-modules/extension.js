@@ -80,7 +80,7 @@ class DynamicModulesController {
         backgroundColor: new vscode.ThemeColor("diffEditor.removedLineBackground"),
         fontStyle: "italic",
         margin: "0",
-        textDecoration: "none; display: block; white-space: pre; width: 100vw; box-sizing: border-box;"
+        textDecoration: "line-through"
       }
     });
 
@@ -753,8 +753,19 @@ class DynamicModulesController {
     }
 
     const interactions = this.interactionsForDocument(editor.document);
+    const blocks = this.overrideBlocksForDocument(editor.document, interactions);
+    const blockInteractionKeys = new Set();
+    for (const block of blocks) {
+      for (const interaction of block.interactions) {
+        blockInteractionKeys.add(interactionKey(interaction));
+      }
+    }
+
     const decorations = [];
     for (const interaction of interactions) {
+      if (blockInteractionKeys.has(interactionKey(interaction))) {
+        continue;
+      }
       const lineNumber = Number(interaction.anchor_line);
       if (!Number.isInteger(lineNumber)) {
         continue;
@@ -776,10 +787,10 @@ class DynamicModulesController {
       });
     }
     editor.setDecorations(this.decorationType, decorations);
-    this.updateOverrideBlockDecorations(editor, interactions);
+    this.updateOverrideBlockDecorations(editor, interactions, blocks);
   }
 
-  updateOverrideBlockDecorations(editor, interactions) {
+  updateOverrideBlockDecorations(editor, interactions, blocks = null) {
     if (!this.config().get("showInlineOverrideBlocks", true)) {
       editor.setDecorations(this.overrideStartDecorationType, []);
       editor.setDecorations(this.overrideChangedDecorationType, []);
@@ -787,7 +798,7 @@ class DynamicModulesController {
       editor.setDecorations(this.overrideRemovedDecorationType, []);
       return;
     }
-    const blocks = this.overrideBlocksForDocument(editor.document, interactions);
+    blocks ??= this.overrideBlocksForDocument(editor.document, interactions);
     if (!blocks.length) {
       editor.setDecorations(this.overrideStartDecorationType, []);
       editor.setDecorations(this.overrideChangedDecorationType, []);
@@ -3238,7 +3249,7 @@ function languageForPath(filePath) {
 }
 
 function removedGhostText(lines) {
-  return lines.map((line) => `REMOVED: ${line}`).join("\n");
+  return `${lines.map((line) => `REMOVED: ${line}`).join("  |  ")}  `;
 }
 
 function isLikelyAbsolute(value) {
