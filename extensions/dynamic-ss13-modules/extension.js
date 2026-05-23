@@ -622,7 +622,7 @@ class DynamicModulesController {
   }
 
   async ensureLiveAuthoringWorkspaceFolder(sessionRoot) {
-    if (!this.config().get("addLiveFinalFolderToWorkspace", true) || !sessionRoot) {
+    if (!this.config().get("addLiveFinalFolderToWorkspace", false) || !sessionRoot) {
       return;
     }
     const liveFilesRoot = path.join(sessionRoot, "files");

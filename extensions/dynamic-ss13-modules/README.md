@@ -67,9 +67,13 @@ opens a live final authoring copy under:
 .dynamic_modules_authoring/_live/files/
 ```
 
-That folder is added to the workspace as `dynamic-final`, which means VS Code
-search, navigation, and normal editor operations see real files containing the
-post-module content. The original host checkout files are left untouched.
+The folder remains inside the host repository, so opened final files are real
+files and can be searched directly. The extension no longer adds that folder as
+a second workspace root by default, because doing so turns a normal folder
+window into an untitled multi-root workspace and can make external launchers
+open a duplicate VS Code window. Enable
+`dynamicSs13Modules.addLiveFinalFolderToWorkspace` only if you explicitly want
+that multi-root workspace behavior.
 
 The editor overlays mark changed regions with:
 
